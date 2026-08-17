@@ -800,6 +800,42 @@ final class PhotoWorkspaceTests: XCTestCase {
     XCTAssertEqual(workspace.stack(containing: green.id)?.isExpanded, false)
   }
 
+  func testReopenLoadsDurableCollectionsAndStacksWhenCatalogSupportsLibraryStore() async throws {
+    let asset = makeAsset(name: "durable-library.jpg")
+    let other = makeAsset(name: "other-library.jpg")
+    let collection = try XCTUnwrap(
+      PhotoCollection(
+        name: "Portfolio",
+        kind: .regular,
+        assetIDs: [asset.id]
+      )
+    )
+    let stack = try XCTUnwrap(
+      PhotoStack(
+        assetIDs: [asset.id],
+        representativeAssetID: asset.id,
+        isCollapsed: true
+      )
+    )
+    let catalog = CatalogSpy(
+      assets: [asset, other],
+      recipes: [
+        asset.id: makeRecipe(assetID: asset.id),
+        other.id: makeRecipe(assetID: other.id),
+      ],
+      collections: [collection],
+      stacks: [stack]
+    )
+    let workspace = makeWorkspace(catalog: catalog)
+
+    await workspace.reopen()
+
+    XCTAssertEqual(workspace.durableCollections, [collection])
+    XCTAssertEqual(workspace.durableStacks, [stack])
+    workspace.activeCollectionID = collection.id
+    XCTAssertEqual(workspace.filteredAssets.map(\.id), [asset.id])
+  }
+
   func testDeliverOptionsReachTheExporter() async throws {
     let asset = makeAsset(name: "deliver.jpg")
     let recipe = makeRecipe(assetID: asset.id)
@@ -1001,16 +1037,25 @@ extension PhotoWorkspaceTests {
   }
 }
 
-private actor CatalogSpy: MetadataCatalogStore {
+private actor CatalogSpy: MetadataCatalogStore, LibraryCatalogStore {
   private var storedAssets: [PhotoAsset]
   private var recipes: [UUID: EditRecipe]
+  private var storedCollections: [PhotoCollection]
+  private var storedStacks: [PhotoStack]
   private var recipeSaves: [EditRecipe] = []
   private var missing: [UUID: Bool] = [:]
   private var shouldFailNextRecipeSave = false
 
-  init(assets: [PhotoAsset] = [], recipes: [UUID: EditRecipe] = [:]) {
+  init(
+    assets: [PhotoAsset] = [],
+    recipes: [UUID: EditRecipe] = [:],
+    collections: [PhotoCollection] = [],
+    stacks: [PhotoStack] = []
+  ) {
     storedAssets = assets
     self.recipes = recipes
+    storedCollections = collections
+    storedStacks = stacks
   }
 
   func upsertAsset(_ request: CatalogAssetUpsertRequest) async throws -> CatalogAssetUpsertResult {
@@ -1130,6 +1175,56 @@ private actor CatalogSpy: MetadataCatalogStore {
     _ request: CatalogApplyMetadataPresetRequest
   ) async throws -> CatalogApplyMetadataPresetResult {
     throw TestError.unused
+  }
+
+  func saveCollection(_ request: CatalogCollectionSaveRequest) async throws
+    -> CatalogCollectionSaveResult
+  {
+    storedCollections.removeAll { $0.id == request.collection.id }
+    storedCollections.append(request.collection)
+    return CatalogCollectionSaveResult(collection: request.collection)
+  }
+
+  func listCollections(_ request: CatalogCollectionListRequest) async throws
+    -> CatalogCollectionListResult
+  {
+    CatalogCollectionListResult(collections: storedCollections)
+  }
+
+  func deleteCollection(_ request: CatalogCollectionDeleteRequest) async throws
+    -> CatalogCollectionDeleteResult
+  {
+    storedCollections.removeAll { $0.id == request.collectionID }
+    return CatalogCollectionDeleteResult(collectionID: request.collectionID)
+  }
+
+  func listCollectionAssets(_ request: CatalogCollectionAssetsRequest) async throws
+    -> CatalogCollectionAssetsResult
+  {
+    let ids = Set(storedCollections.first { $0.id == request.collectionID }?.assetIDs ?? [])
+    return CatalogCollectionAssetsResult(assets: storedAssets.filter { ids.contains($0.id) })
+  }
+
+  func saveStack(_ request: CatalogStackSaveRequest) async throws -> CatalogStackSaveResult {
+    storedStacks.removeAll { $0.id == request.stack.id }
+    storedStacks.append(request.stack)
+    return CatalogStackSaveResult(stack: request.stack)
+  }
+
+  func listStacks(_ request: CatalogStackListRequest) async throws -> CatalogStackListResult {
+    CatalogStackListResult(stacks: storedStacks)
+  }
+
+  func deleteStack(_ request: CatalogStackDeleteRequest) async throws -> CatalogStackDeleteResult {
+    storedStacks.removeAll { $0.id == request.stackID }
+    return CatalogStackDeleteResult(stackID: request.stackID)
+  }
+
+  func listStackAssets(_ request: CatalogStackAssetsRequest) async throws
+    -> CatalogStackAssetsResult
+  {
+    let ids = Set(storedStacks.first { $0.id == request.stackID }?.assetIDs ?? [])
+    return CatalogStackAssetsResult(assets: storedAssets.filter { ids.contains($0.id) })
   }
 
   func savedRecipes() -> [EditRecipe] { recipeSaves }

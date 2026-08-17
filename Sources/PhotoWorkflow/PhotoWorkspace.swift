@@ -34,6 +34,8 @@ public final class PhotoWorkspace {
   public var isBatchExporting = false
   public var collections: [LibraryCollection] = []
   public var stacks: [LibraryStack] = []
+  public var durableCollections: [PhotoCollection] = []
+  public var durableStacks: [PhotoStack] = []
   public var smartFilter = LibrarySmartFilter()
   public var activeCollectionID: UUID?
   public var deliverOptions = DeliverOptions()
@@ -46,6 +48,10 @@ public final class PhotoWorkspace {
   public var selectedAsset: PhotoAsset? {
     guard let selectedAssetID else { return nil }
     return assets.first { $0.id == selectedAssetID }
+  }
+
+  public var supportsDurableLibrary: Bool {
+    catalog is any LibraryCatalogStore
   }
 
   /// The latest persisted three-way grade, or the neutral grade when the
@@ -73,8 +79,22 @@ public final class PhotoWorkspace {
   }
 
   public var filteredAssets: [PhotoAsset] {
-    let collectionAssetIDs = activeCollectionID.flatMap { collectionID in
-      collections.first { $0.id == collectionID }.map { Set($0.assetIDs) }
+    var collectionFilter: ((PhotoAsset) -> Bool)?
+    if let collectionID = activeCollectionID {
+      if let sessionCollection = collections.first(where: { $0.id == collectionID }) {
+        let assetIDs = Set(sessionCollection.assetIDs)
+        collectionFilter = { assetIDs.contains($0.id) }
+      } else if let durableCollection = durableCollections.first(where: { $0.id == collectionID }) {
+        switch durableCollection.kind {
+        case .regular:
+          let assetIDs = Set(durableCollection.assetIDs)
+          collectionFilter = { assetIDs.contains($0.id) }
+        case .smart:
+          collectionFilter = { durableCollection.predicate?.matches($0) == true }
+        }
+      } else {
+        collectionFilter = { _ in false }
+      }
     }
     return assets.filter { asset in
       if !searchText.isEmpty,
@@ -82,7 +102,7 @@ public final class PhotoWorkspace {
       {
         return false
       }
-      if let collectionAssetIDs, !collectionAssetIDs.contains(asset.id) { return false }
+      if let collectionFilter, !collectionFilter(asset) { return false }
       return smartFilter.matches(asset)
     }
   }
@@ -160,6 +180,21 @@ public final class PhotoWorkspace {
       selectedAssetID = nil
       currentRecipe = nil
       preview = nil
+      durableCollections = []
+      durableStacks = []
+
+      if let libraryCatalog = catalog as? any LibraryCatalogStore {
+        do {
+          durableCollections = try await libraryCatalog.listCollections(
+            CatalogCollectionListRequest()
+          ).collections
+          durableStacks = try await libraryCatalog.listStacks(
+            CatalogStackListRequest()
+          ).stacks
+        } catch {
+          record(error, operation: "library.reopen")
+        }
+      }
 
       var availableAssetIDs: [UUID] = []
       for index in assets.indices {
@@ -425,6 +460,101 @@ public final class PhotoWorkspace {
   public func setColorLabel(_ colorLabel: ColorLabel?) async {
     await enqueueLibraryMutation { [weak self] in
       await self?.updateSelectedAssetMetadata(rating: nil, colorLabel: .some(colorLabel))
+    }
+  }
+
+  public func createDurableCollection(named name: String, assetIDs: [UUID] = []) async {
+    guard let libraryCatalog = catalog as? any LibraryCatalogStore else {
+      record(PhotoWorkspaceError.libraryStoreUnavailable, operation: "library.collection.create")
+      return
+    }
+    guard
+      let collection = PhotoCollection(
+        name: name,
+        kind: .regular,
+        assetIDs: assetIDs
+      )
+    else {
+      record(
+        PhotoWorkspaceError.operationFailed(
+          operation: "library.collection.create",
+          message: "The collection name or membership is not valid."
+        ),
+        operation: "library.collection.create"
+      )
+      return
+    }
+    do {
+      let saved = try await libraryCatalog.saveCollection(
+        CatalogCollectionSaveRequest(collection: collection)
+      ).collection
+      durableCollections.append(saved)
+      durableCollections.sort { $0.updatedAt > $1.updatedAt }
+      lastError = nil
+      errorMessage = nil
+    } catch {
+      record(error, operation: "library.collection.create")
+    }
+  }
+
+  public func createDurableStack(assetIDs: [UUID]) async {
+    guard let libraryCatalog = catalog as? any LibraryCatalogStore else {
+      record(PhotoWorkspaceError.libraryStoreUnavailable, operation: "library.stack.create")
+      return
+    }
+    guard let representativeAssetID = assetIDs.first,
+      let stack = PhotoStack(
+        assetIDs: assetIDs,
+        representativeAssetID: representativeAssetID
+      )
+    else {
+      record(
+        PhotoWorkspaceError.operationFailed(
+          operation: "library.stack.create",
+          message: "Select at least one photograph for a stack."
+        ),
+        operation: "library.stack.create"
+      )
+      return
+    }
+    do {
+      let saved = try await libraryCatalog.saveStack(
+        CatalogStackSaveRequest(stack: stack)
+      ).stack
+      durableStacks.append(saved)
+      durableStacks.sort { $0.updatedAt > $1.updatedAt }
+      lastError = nil
+      errorMessage = nil
+    } catch {
+      record(error, operation: "library.stack.create")
+    }
+  }
+
+  public func toggleDurableStack(_ id: UUID) async {
+    guard let index = durableStacks.firstIndex(where: { $0.id == id }) else { return }
+    guard let libraryCatalog = catalog as? any LibraryCatalogStore else {
+      record(PhotoWorkspaceError.libraryStoreUnavailable, operation: "library.stack.toggle")
+      return
+    }
+    let current = durableStacks[index]
+    guard
+      let updated = PhotoStack(
+        id: current.id,
+        assetIDs: current.assetIDs,
+        representativeAssetID: current.representativeAssetID,
+        isCollapsed: !current.isCollapsed,
+        createdAt: current.createdAt,
+        updatedAt: now()
+      )
+    else { return }
+    do {
+      durableStacks[index] = try await libraryCatalog.saveStack(
+        CatalogStackSaveRequest(stack: updated)
+      ).stack
+      lastError = nil
+      errorMessage = nil
+    } catch {
+      record(error, operation: "library.stack.toggle")
     }
   }
 

@@ -165,9 +165,117 @@ struct WorkspaceSidebar: View {
           }
         }
 
-        Text("Collections and stacks are session-only in this version.")
-          .font(.caption2)
-          .foregroundStyle(.tertiary)
+        if workspace.supportsDurableLibrary {
+          HStack {
+            Text("SAVED COLLECTIONS")
+              .font(.caption2.weight(.semibold))
+              .foregroundStyle(.tertiary)
+              .tracking(0.7)
+            Spacer()
+            Button {
+              Task {
+                await workspace.createDurableCollection(
+                  named: "Collection \(workspace.durableCollections.count + 1)",
+                  assetIDs: workspace.filteredAssets.map(\.id)
+                )
+              }
+            } label: {
+              Image(systemName: "plus")
+            }
+            .buttonStyle(.plain)
+            .help("Create a durable collection from the visible set")
+          }
+
+          if workspace.durableCollections.isEmpty {
+            Text("No saved collections")
+              .font(.caption)
+              .foregroundStyle(.tertiary)
+          } else {
+            ForEach(workspace.durableCollections) { collection in
+              Button {
+                workspace.activeCollectionID = collection.id
+              } label: {
+                HStack {
+                  Label(
+                    collection.name,
+                    systemImage: collection.kind == .smart
+                      ? "gearshape.2"
+                      : "rectangle.stack"
+                  )
+                  .lineLimit(1)
+                  Spacer()
+                  if collection.kind == .smart {
+                    Text("Smart")
+                      .foregroundStyle(.secondary)
+                  } else {
+                    Text(collection.assetIDs.count, format: .number)
+                      .foregroundStyle(.secondary)
+                  }
+                }
+                .contentShape(.rect)
+              }
+              .buttonStyle(.plain)
+              .font(.callout)
+            }
+          }
+
+          HStack {
+            Text("SAVED STACKS")
+              .font(.caption2.weight(.semibold))
+              .foregroundStyle(.tertiary)
+              .tracking(0.7)
+            Spacer()
+            Button {
+              Task {
+                await workspace.createDurableStack(
+                  assetIDs: workspace.filteredAssets.map(\.id)
+                )
+              }
+            } label: {
+              Image(systemName: "square.stack.3d.up")
+            }
+            .buttonStyle(.plain)
+            .disabled(workspace.filteredAssets.isEmpty)
+            .help("Save the visible photographs as a durable stack")
+          }
+
+          if workspace.durableStacks.isEmpty {
+            Text("No saved stacks")
+              .font(.caption)
+              .foregroundStyle(.tertiary)
+          } else {
+            ForEach(workspace.durableStacks) { stack in
+              Button {
+                Task { await workspace.toggleDurableStack(stack.id) }
+              } label: {
+                HStack {
+                  Label(
+                    "Stack \(stack.assetIDs.count)",
+                    systemImage: stack.isCollapsed
+                      ? "square.stack.3d.up"
+                      : "square.stack.3d.up.fill"
+                  )
+                  .lineLimit(1)
+                  Spacer()
+                  Text(stack.isCollapsed ? "Collapsed" : "Expanded")
+                    .foregroundStyle(.secondary)
+                }
+                .contentShape(.rect)
+              }
+              .buttonStyle(.plain)
+              .font(.callout)
+              .help("Toggle saved stack visibility")
+            }
+          }
+        }
+
+        Text(
+          workspace.supportsDurableLibrary
+            ? "Saved collections and stacks persist in the catalog. Session collections remain temporary."
+            : "Collections and stacks are session-only in this version."
+        )
+        .font(.caption2)
+        .foregroundStyle(.tertiary)
       }
       .padding(18)
 

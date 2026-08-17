@@ -39,7 +39,8 @@ The interface can import local sources, browse a catalog, apply basic and
 baseline Develop groups, crop and rotate, compare before and after, inspect
 the histogram and three-way colour grade, author versioned masks, edit
 catalog metadata, and write JPEG, PNG, HEIF, or TIFF output through Deliver.
-Session collections and stacks are not durable.
+Durable regular and smart collections plus photo stacks load from the catalog and
+can be created from the Library sidebar. Session collections remain temporary.
 The baseline controls and mask contracts are pre-alpha workflow evidence;
 they are not a Lightroom-equivalent implementation.
 
