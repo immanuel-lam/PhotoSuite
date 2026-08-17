@@ -234,6 +234,130 @@ public struct CatalogStackAssetsResult: Codable, Hashable, Sendable {
   }
 }
 
+public struct CatalogKeywordNodeSaveRequest: Codable, Hashable, Sendable {
+  public let keyword: KeywordNode
+
+  public init(keyword: KeywordNode) {
+    self.keyword = keyword
+  }
+}
+
+public struct CatalogKeywordNodeSaveResult: Codable, Hashable, Sendable {
+  public let keyword: KeywordNode
+
+  public init(keyword: KeywordNode) {
+    self.keyword = keyword
+  }
+}
+
+public struct CatalogKeywordNodeListRequest: Codable, Hashable, Sendable {
+  public init() {}
+}
+
+public struct CatalogKeywordNodeListResult: Codable, Hashable, Sendable {
+  public let keywords: [KeywordNode]
+
+  public init(keywords: [KeywordNode]) {
+    self.keywords = keywords
+  }
+}
+
+public struct CatalogKeywordNodeDeleteRequest: Codable, Hashable, Sendable {
+  public let keywordID: UUID
+
+  public init(keywordID: UUID) {
+    self.keywordID = keywordID
+  }
+}
+
+public struct CatalogKeywordNodeDeleteResult: Codable, Hashable, Sendable {
+  public let keywordID: UUID
+
+  public init(keywordID: UUID) {
+    self.keywordID = keywordID
+  }
+}
+
+public struct CatalogAssetKeywordSetRequest: Codable, Hashable, Sendable {
+  public let assetID: UUID
+  public let keywordIDs: [UUID]
+
+  public init(assetID: UUID, keywordIDs: [UUID]) {
+    self.assetID = assetID
+    self.keywordIDs = keywordIDs
+  }
+}
+
+public struct CatalogAssetKeywordSetResult: Codable, Hashable, Sendable {
+  public let assetID: UUID
+  public let keywordIDs: [UUID]
+
+  public init(assetID: UUID, keywordIDs: [UUID]) {
+    self.assetID = assetID
+    self.keywordIDs = keywordIDs
+  }
+}
+
+public struct CatalogAssetKeywordListRequest: Codable, Hashable, Sendable {
+  public let assetID: UUID
+
+  public init(assetID: UUID) {
+    self.assetID = assetID
+  }
+}
+
+public struct CatalogAssetKeywordListResult: Codable, Hashable, Sendable {
+  public let keywords: [KeywordNode]
+
+  public init(keywords: [KeywordNode]) {
+    self.keywords = keywords
+  }
+}
+
+public struct CatalogVirtualCopySaveRequest: Codable, Hashable, Sendable {
+  public let virtualCopy: VirtualCopy
+
+  public init(virtualCopy: VirtualCopy) {
+    self.virtualCopy = virtualCopy
+  }
+}
+
+public struct CatalogVirtualCopySaveResult: Codable, Hashable, Sendable {
+  public let virtualCopy: VirtualCopy
+
+  public init(virtualCopy: VirtualCopy) {
+    self.virtualCopy = virtualCopy
+  }
+}
+
+public struct CatalogVirtualCopyListRequest: Codable, Hashable, Sendable {
+  public init() {}
+}
+
+public struct CatalogVirtualCopyListResult: Codable, Hashable, Sendable {
+  public let virtualCopies: [VirtualCopy]
+
+  public init(virtualCopies: [VirtualCopy]) {
+    self.virtualCopies = virtualCopies
+  }
+}
+
+public struct CatalogVirtualCopyDeleteRequest: Codable, Hashable, Sendable {
+  public let virtualCopyID: UUID
+
+  public init(virtualCopyID: UUID) {
+    self.virtualCopyID = virtualCopyID
+  }
+}
+
+public struct CatalogVirtualCopyDeleteResult: Codable, Hashable, Sendable {
+  public let virtualCopyID: UUID
+
+  public init(virtualCopyID: UUID) {
+    self.virtualCopyID = virtualCopyID
+  }
+}
+
 public enum CatalogAssetOrder: String, Codable, Hashable, Sendable {
   case importDateAscending
   case importDateDescending
@@ -303,9 +427,11 @@ public struct CatalogRecipeSaveResult: Codable, Hashable, Sendable {
 
 public struct CatalogLatestRecipeRequest: Codable, Hashable, Sendable {
   public let assetID: UUID
+  public let virtualCopyID: UUID?
 
-  public init(assetID: UUID) {
+  public init(assetID: UUID, virtualCopyID: UUID? = nil) {
     self.assetID = assetID
+    self.virtualCopyID = virtualCopyID
   }
 }
 
@@ -436,6 +562,22 @@ public protocol LibraryCatalogStore: CatalogStore {
   func deleteStack(_ request: CatalogStackDeleteRequest) async throws -> CatalogStackDeleteResult
   func listStackAssets(_ request: CatalogStackAssetsRequest) async throws
     -> CatalogStackAssetsResult
+  func saveKeywordNode(_ request: CatalogKeywordNodeSaveRequest) async throws
+    -> CatalogKeywordNodeSaveResult
+  func listKeywordNodes(_ request: CatalogKeywordNodeListRequest) async throws
+    -> CatalogKeywordNodeListResult
+  func deleteKeywordNode(_ request: CatalogKeywordNodeDeleteRequest) async throws
+    -> CatalogKeywordNodeDeleteResult
+  func setAssetKeywords(_ request: CatalogAssetKeywordSetRequest) async throws
+    -> CatalogAssetKeywordSetResult
+  func listAssetKeywords(_ request: CatalogAssetKeywordListRequest) async throws
+    -> CatalogAssetKeywordListResult
+  func saveVirtualCopy(_ request: CatalogVirtualCopySaveRequest) async throws
+    -> CatalogVirtualCopySaveResult
+  func listVirtualCopies(_ request: CatalogVirtualCopyListRequest) async throws
+    -> CatalogVirtualCopyListResult
+  func deleteVirtualCopy(_ request: CatalogVirtualCopyDeleteRequest) async throws
+    -> CatalogVirtualCopyDeleteResult
 }
 
 public struct JobEnqueueRequest: Codable, Hashable, Sendable {

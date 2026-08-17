@@ -68,7 +68,7 @@ private struct SQLiteIndexColumn: Equatable {
 }
 
 public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCatalogStore, JobEngine {
-  private static let schemaVersion: Int64 = 3
+  private static let schemaVersion: Int64 = 4
   private let connection: SQLiteConnection
   private let ftsAvailable: Bool
   private let encoder: JSONEncoder
@@ -663,6 +663,257 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
     )
   }
 
+  public func saveKeywordNode(
+    _ request: CatalogKeywordNodeSaveRequest
+  ) async throws -> CatalogKeywordNodeSaveResult {
+    let keyword = request.keyword
+    if let parentID = keyword.parentID {
+      guard try keywordNode(id: parentID, operation: "keyword.save") != nil else {
+        throw CatalogStoreError.notFound(
+          operation: "keyword.save", message: "The keyword parent does not exist.")
+      }
+      guard try !keywordHasAncestor(keyword.id, startingAt: parentID, operation: "keyword.save") else {
+        throw CatalogStoreError.invalidRequest(
+          operation: "keyword.save", message: "A keyword cannot be its own ancestor.")
+      }
+    }
+    if let existingID = try keywordID(
+      name: keyword.normalizedName, parentID: keyword.parentID, operation: "keyword.save"),
+      existingID != keyword.id
+    {
+      throw CatalogStoreError.invalidRequest(
+        operation: "keyword.save", message: "A sibling keyword with this name already exists.")
+    }
+    try withStatement(
+      """
+      INSERT INTO keyword_nodes (
+        id, name, parent_id, normalized_name, created_ms, updated_ms
+      ) VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        name=excluded.name,
+        parent_id=excluded.parent_id,
+        normalized_name=excluded.normalized_name,
+        created_ms=excluded.created_ms,
+        updated_ms=excluded.updated_ms;
+      """,
+      operation: "keyword.save"
+    ) { statement in
+      try bind(assetID: keyword.id, to: statement, index: 1, operation: "keyword.save")
+      try bind(keyword.name, to: statement, index: 2, operation: "keyword.save")
+      try bind(keyword.parentID.map { $0.uuidString.lowercased() }, to: statement, index: 3, operation: "keyword.save")
+      try bind(keyword.normalizedName, to: statement, index: 4, operation: "keyword.save")
+      try bind(milliseconds(keyword.createdAt), to: statement, index: 5, operation: "keyword.save")
+      try bind(milliseconds(keyword.updatedAt), to: statement, index: 6, operation: "keyword.save")
+      try stepDone(statement, operation: "keyword.save")
+    }
+    return CatalogKeywordNodeSaveResult(keyword: keyword)
+  }
+
+  public func listKeywordNodes(
+    _ request: CatalogKeywordNodeListRequest
+  ) async throws -> CatalogKeywordNodeListResult {
+    _ = request
+    let keywords: [KeywordNode] = try withStatement(
+      """
+      SELECT id, name, parent_id, normalized_name, created_ms, updated_ms
+      FROM keyword_nodes
+      ORDER BY CASE WHEN parent_id IS NULL THEN 0 ELSE 1 END,
+        normalized_name ASC, id ASC;
+      """,
+      operation: "keyword.list"
+    ) { statement in
+      var results: [KeywordNode] = []
+      while true {
+        let code = sqlite3_step(statement)
+        if code == SQLITE_DONE { break }
+        guard code == SQLITE_ROW else { throw sqliteError(operation: "keyword.list", code: code) }
+        results.append(try decodeKeywordNode(statement, operation: "keyword.list"))
+      }
+      return results
+    }
+    return CatalogKeywordNodeListResult(keywords: keywords)
+  }
+
+  public func deleteKeywordNode(
+    _ request: CatalogKeywordNodeDeleteRequest
+  ) async throws -> CatalogKeywordNodeDeleteResult {
+    guard try keywordNode(id: request.keywordID, operation: "keyword.delete") != nil else {
+      throw CatalogStoreError.notFound(
+        operation: "keyword.delete", message: "The keyword does not exist.")
+    }
+    let childCount = try scalarInt(
+      sql: "SELECT COUNT(*) FROM keyword_nodes WHERE parent_id = ?;", operation: "keyword.delete") { statement in
+        try self.bind(assetID: request.keywordID, to: statement, index: 1, operation: "keyword.delete")
+      }
+    let assignmentCount = try scalarInt(
+      sql: "SELECT COUNT(*) FROM asset_keyword_nodes WHERE keyword_id = ?;", operation: "keyword.delete") { statement in
+        try self.bind(assetID: request.keywordID, to: statement, index: 1, operation: "keyword.delete")
+      }
+    guard childCount == 0, assignmentCount == 0 else {
+      throw CatalogStoreError.invalidRequest(
+        operation: "keyword.delete",
+        message: "A keyword with children or asset assignments cannot be deleted."
+      )
+    }
+    try withStatement(
+      "DELETE FROM keyword_nodes WHERE id = ?;", operation: "keyword.delete"
+    ) { statement in
+      try bind(assetID: request.keywordID, to: statement, index: 1, operation: "keyword.delete")
+      try stepDone(statement, operation: "keyword.delete")
+    }
+    return CatalogKeywordNodeDeleteResult(keywordID: request.keywordID)
+  }
+
+  public func setAssetKeywords(
+    _ request: CatalogAssetKeywordSetRequest
+  ) async throws -> CatalogAssetKeywordSetResult {
+    guard try assetExists(request.assetID, operation: "asset.keywords.set") else {
+      throw CatalogStoreError.notFound(
+        operation: "asset.keywords.set", message: "The asset does not exist.")
+    }
+    guard Set(request.keywordIDs).count == request.keywordIDs.count else {
+      throw CatalogStoreError.invalidRequest(
+        operation: "asset.keywords.set", message: "Keyword assignments must be unique.")
+    }
+    guard try allKeywordIDsExist(request.keywordIDs, operation: "asset.keywords.set") else {
+      throw CatalogStoreError.notFound(
+        operation: "asset.keywords.set", message: "A keyword assignment does not exist.")
+    }
+    try withTransaction(operation: "asset.keywords.set") {
+      try withStatement(
+        "DELETE FROM asset_keyword_nodes WHERE asset_id = ?;", operation: "asset.keywords.set.delete"
+      ) { statement in
+        try bind(assetID: request.assetID, to: statement, index: 1, operation: "asset.keywords.set.delete")
+        try stepDone(statement, operation: "asset.keywords.set.delete")
+      }
+      for keywordID in request.keywordIDs {
+        try withStatement(
+          "INSERT INTO asset_keyword_nodes (asset_id, keyword_id) VALUES (?, ?);",
+          operation: "asset.keywords.set.insert"
+        ) { statement in
+          try bind(assetID: request.assetID, to: statement, index: 1, operation: "asset.keywords.set.insert")
+          try bind(assetID: keywordID, to: statement, index: 2, operation: "asset.keywords.set.insert")
+          try stepDone(statement, operation: "asset.keywords.set.insert")
+        }
+      }
+    }
+    return CatalogAssetKeywordSetResult(
+      assetID: request.assetID, keywordIDs: request.keywordIDs)
+  }
+
+  public func listAssetKeywords(
+    _ request: CatalogAssetKeywordListRequest
+  ) async throws -> CatalogAssetKeywordListResult {
+    guard try assetExists(request.assetID, operation: "asset.keywords.list") else {
+      throw CatalogStoreError.notFound(
+        operation: "asset.keywords.list", message: "The asset does not exist.")
+    }
+    let keywords: [KeywordNode] = try withStatement(
+      """
+      SELECT keyword_nodes.id, keyword_nodes.name, keyword_nodes.parent_id,
+        keyword_nodes.normalized_name, keyword_nodes.created_ms, keyword_nodes.updated_ms
+      FROM asset_keyword_nodes
+      JOIN keyword_nodes ON keyword_nodes.id = asset_keyword_nodes.keyword_id
+      WHERE asset_keyword_nodes.asset_id = ?
+      ORDER BY keyword_nodes.normalized_name ASC, keyword_nodes.id ASC;
+      """,
+      operation: "asset.keywords.list"
+    ) { statement in
+      try bind(assetID: request.assetID, to: statement, index: 1, operation: "asset.keywords.list")
+      var results: [KeywordNode] = []
+      while true {
+        let code = sqlite3_step(statement)
+        if code == SQLITE_DONE { break }
+        guard code == SQLITE_ROW else {
+          throw sqliteError(operation: "asset.keywords.list", code: code)
+        }
+        results.append(try decodeKeywordNode(statement, operation: "asset.keywords.list"))
+      }
+      return results
+    }
+    return CatalogAssetKeywordListResult(keywords: keywords)
+  }
+
+  public func saveVirtualCopy(
+    _ request: CatalogVirtualCopySaveRequest
+  ) async throws -> CatalogVirtualCopySaveResult {
+    let virtualCopy = request.virtualCopy
+    guard try assetExists(virtualCopy.sourceAssetID, operation: "virtualCopy.save") else {
+      throw CatalogStoreError.notFound(
+        operation: "virtualCopy.save", message: "The source asset does not exist.")
+    }
+    if let existingID = try virtualCopyID(
+      sourceAssetID: virtualCopy.sourceAssetID,
+      name: virtualCopy.name,
+      operation: "virtualCopy.save"
+    ), existingID != virtualCopy.id {
+      throw CatalogStoreError.invalidRequest(
+        operation: "virtualCopy.save", message: "A virtual copy with this name already exists.")
+    }
+    try withStatement(
+      """
+      INSERT INTO virtual_copies (id, source_asset_id, name, created_ms, updated_ms)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        source_asset_id=excluded.source_asset_id,
+        name=excluded.name,
+        created_ms=excluded.created_ms,
+        updated_ms=excluded.updated_ms;
+      """,
+      operation: "virtualCopy.save"
+    ) { statement in
+      try bind(assetID: virtualCopy.id, to: statement, index: 1, operation: "virtualCopy.save")
+      try bind(assetID: virtualCopy.sourceAssetID, to: statement, index: 2, operation: "virtualCopy.save")
+      try bind(virtualCopy.name, to: statement, index: 3, operation: "virtualCopy.save")
+      try bind(milliseconds(virtualCopy.createdAt), to: statement, index: 4, operation: "virtualCopy.save")
+      try bind(milliseconds(virtualCopy.updatedAt), to: statement, index: 5, operation: "virtualCopy.save")
+      try stepDone(statement, operation: "virtualCopy.save")
+    }
+    return CatalogVirtualCopySaveResult(virtualCopy: virtualCopy)
+  }
+
+  public func listVirtualCopies(
+    _ request: CatalogVirtualCopyListRequest
+  ) async throws -> CatalogVirtualCopyListResult {
+    _ = request
+    let virtualCopies: [VirtualCopy] = try withStatement(
+      """
+      SELECT id, source_asset_id, name, created_ms, updated_ms
+      FROM virtual_copies
+      ORDER BY name COLLATE NOCASE ASC, id ASC;
+      """,
+      operation: "virtualCopy.list"
+    ) { statement in
+      var results: [VirtualCopy] = []
+      while true {
+        let code = sqlite3_step(statement)
+        if code == SQLITE_DONE { break }
+        guard code == SQLITE_ROW else {
+          throw sqliteError(operation: "virtualCopy.list", code: code)
+        }
+        results.append(try decodeVirtualCopy(statement, operation: "virtualCopy.list"))
+      }
+      return results
+    }
+    return CatalogVirtualCopyListResult(virtualCopies: virtualCopies)
+  }
+
+  public func deleteVirtualCopy(
+    _ request: CatalogVirtualCopyDeleteRequest
+  ) async throws -> CatalogVirtualCopyDeleteResult {
+    try withStatement(
+      "DELETE FROM virtual_copies WHERE id = ?;", operation: "virtualCopy.delete"
+    ) { statement in
+      try bind(assetID: request.virtualCopyID, to: statement, index: 1, operation: "virtualCopy.delete")
+      try stepDone(statement, operation: "virtualCopy.delete")
+    }
+    guard sqlite3_changes(database) == 1 else {
+      throw CatalogStoreError.notFound(
+        operation: "virtualCopy.delete", message: "The virtual copy does not exist.")
+    }
+    return CatalogVirtualCopyDeleteResult(virtualCopyID: request.virtualCopyID)
+  }
+
   public func listAssets(
     _ request: CatalogAssetListRequest
   ) async throws -> CatalogAssetListResult {
@@ -813,6 +1064,42 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
       throw CatalogStoreError.notFound(
         operation: "recipe.save", message: "The asset does not exist.")
     }
+    if let virtualCopyID = request.recipe.virtualCopyID {
+      guard
+        let virtualCopy = try virtualCopy(id: virtualCopyID, operation: "recipe.save.virtualCopy"),
+        virtualCopy.sourceAssetID == request.recipe.assetID
+      else {
+        throw CatalogStoreError.notFound(
+          operation: "recipe.save.virtualCopy",
+          message: "The virtual copy does not exist for this source asset."
+        )
+      }
+      let data = try encode(request.recipe, operation: "recipe.save.virtualCopy.encode")
+      try withStatement(
+        """
+        INSERT INTO virtual_copy_recipes (virtual_copy_id, revision, date_ms, recipe_json)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(virtual_copy_id, revision) DO UPDATE SET
+          date_ms=excluded.date_ms,
+          recipe_json=excluded.recipe_json;
+        """,
+        operation: "recipe.save.virtualCopy"
+      ) { statement in
+        try bind(assetID: virtualCopyID, to: statement, index: 1, operation: "recipe.save.virtualCopy")
+        try bind(
+          Int64(exactly: request.recipe.revision),
+          to: statement,
+          index: 2,
+          operation: "recipe.save.virtualCopy"
+        )
+        try bind(
+          milliseconds(request.recipe.date), to: statement, index: 3,
+          operation: "recipe.save.virtualCopy")
+        try bind(data, to: statement, index: 4, operation: "recipe.save.virtualCopy")
+        try stepDone(statement, operation: "recipe.save.virtualCopy")
+      }
+      return CatalogRecipeSaveResult(recipe: request.recipe)
+    }
     let data = try encode(request.recipe, operation: "recipe.save.encode")
     try withStatement(
       """
@@ -837,6 +1124,46 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
   public func latestRecipe(
     _ request: CatalogLatestRecipeRequest
   ) async throws -> CatalogLatestRecipeResult {
+    if let virtualCopyID = request.virtualCopyID {
+      guard
+        let virtualCopy = try virtualCopy(id: virtualCopyID, operation: "recipe.latest.virtualCopy"),
+        virtualCopy.sourceAssetID == request.assetID
+      else {
+        throw CatalogStoreError.notFound(
+          operation: "recipe.latest.virtualCopy",
+          message: "The virtual copy does not exist for this source asset."
+        )
+      }
+      let recipe: EditRecipe? = try withStatement(
+        """
+        SELECT recipe_json FROM virtual_copy_recipes
+        WHERE virtual_copy_id = ?
+        ORDER BY revision DESC, date_ms DESC
+        LIMIT 1;
+        """,
+        operation: "recipe.latest.virtualCopy"
+      ) { statement in
+        try bind(assetID: virtualCopyID, to: statement, index: 1, operation: "recipe.latest.virtualCopy")
+        let code = sqlite3_step(statement)
+        if code == SQLITE_DONE { return nil }
+        guard code == SQLITE_ROW else {
+          throw sqliteError(operation: "recipe.latest.virtualCopy", code: code)
+        }
+        let decoded = try decode(
+          EditRecipe.self,
+          from: columnData(statement, column: 0, operation: "recipe.latest.virtualCopy"),
+          operation: "recipe.latest.virtualCopy"
+        )
+        guard decoded.assetID == request.assetID, decoded.virtualCopyID == virtualCopyID else {
+          throw CatalogStoreError.decoding(
+            operation: "recipe.latest.virtualCopy",
+            message: "The virtual copy recipe does not match its stored owner."
+          )
+        }
+        return decoded
+      }
+      return CatalogLatestRecipeResult(recipe: recipe)
+    }
     let recipe: EditRecipe? = try withStatement(
       """
       SELECT recipe_json FROM edit_recipes
@@ -1245,6 +1572,32 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
     }
   }
 
+  private func keywordNode(id: UUID, operation: String) throws -> KeywordNode? {
+    try withStatement(
+      "SELECT id, name, parent_id, normalized_name, created_ms, updated_ms FROM keyword_nodes WHERE id = ?;",
+      operation: operation
+    ) { statement in
+      try bind(assetID: id, to: statement, index: 1, operation: operation)
+      let code = sqlite3_step(statement)
+      if code == SQLITE_DONE { return nil }
+      guard code == SQLITE_ROW else { throw sqliteError(operation: operation, code: code) }
+      return try decodeKeywordNode(statement, operation: operation)
+    }
+  }
+
+  private func virtualCopy(id: UUID, operation: String) throws -> VirtualCopy? {
+    try withStatement(
+      "SELECT id, source_asset_id, name, created_ms, updated_ms FROM virtual_copies WHERE id = ?;",
+      operation: operation
+    ) { statement in
+      try bind(assetID: id, to: statement, index: 1, operation: operation)
+      let code = sqlite3_step(statement)
+      if code == SQLITE_DONE { return nil }
+      guard code == SQLITE_ROW else { throw sqliteError(operation: operation, code: code) }
+      return try decodeVirtualCopy(statement, operation: operation)
+    }
+  }
+
   private func collectionID(named name: String, operation: String) throws -> UUID? {
     try withStatement(
       "SELECT id FROM collections WHERE name = ? COLLATE NOCASE LIMIT 1;", operation: operation
@@ -1259,6 +1612,93 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
       }
       return id
     }
+  }
+
+  private func keywordID(
+    name: String,
+    parentID: UUID?,
+    operation: String
+  ) throws -> UUID? {
+    try withStatement(
+      """
+      SELECT id FROM keyword_nodes
+      WHERE normalized_name = ?
+        AND (parent_id = ? OR (parent_id IS NULL AND ? IS NULL))
+      LIMIT 1;
+      """,
+      operation: operation
+    ) { statement in
+      try bind(name, to: statement, index: 1, operation: operation)
+      let parentValue = parentID?.uuidString.lowercased()
+      try bind(parentValue, to: statement, index: 2, operation: operation)
+      try bind(parentValue, to: statement, index: 3, operation: operation)
+      let code = sqlite3_step(statement)
+      if code == SQLITE_DONE { return nil }
+      guard code == SQLITE_ROW else { throw sqliteError(operation: operation, code: code) }
+      guard let id = UUID(uuidString: try columnString(statement, column: 0, operation: operation))
+      else {
+        throw CatalogStoreError.decoding(operation: operation, message: "The keyword ID is invalid.")
+      }
+      return id
+    }
+  }
+
+  private func virtualCopyID(
+    sourceAssetID: UUID,
+    name: String,
+    operation: String
+  ) throws -> UUID? {
+    try withStatement(
+      "SELECT id FROM virtual_copies WHERE source_asset_id = ? AND name = ? COLLATE NOCASE LIMIT 1;",
+      operation: operation
+    ) { statement in
+      try bind(assetID: sourceAssetID, to: statement, index: 1, operation: operation)
+      try bind(name, to: statement, index: 2, operation: operation)
+      let code = sqlite3_step(statement)
+      if code == SQLITE_DONE { return nil }
+      guard code == SQLITE_ROW else { throw sqliteError(operation: operation, code: code) }
+      guard let id = UUID(uuidString: try columnString(statement, column: 0, operation: operation))
+      else {
+        throw CatalogStoreError.decoding(
+          operation: operation, message: "The virtual copy ID is invalid.")
+      }
+      return id
+    }
+  }
+
+  private func keywordHasAncestor(
+    _ id: UUID,
+    startingAt ancestorID: UUID,
+    operation: String
+  ) throws -> Bool {
+    var nextID: UUID? = ancestorID
+    var visited = Set<UUID>()
+    while let currentID = nextID {
+      if currentID == id { return true }
+      guard visited.insert(currentID).inserted else {
+        throw CatalogStoreError.decoding(
+          operation: operation, message: "The keyword hierarchy contains a cycle.")
+      }
+      guard let current = try keywordNode(id: currentID, operation: operation) else { return false }
+      nextID = current.parentID
+    }
+    return false
+  }
+
+  private func allKeywordIDsExist(_ ids: [UUID], operation: String) throws -> Bool {
+    guard !ids.isEmpty else { return true }
+    let placeholders = Array(repeating: "?", count: ids.count).joined(separator: ",")
+    let count = try withStatement(
+      "SELECT COUNT(*) FROM keyword_nodes WHERE id IN (\(placeholders));", operation: operation
+    ) { statement in
+      for (index, id) in ids.enumerated() {
+        try bind(assetID: id, to: statement, index: Int32(index + 1), operation: operation)
+      }
+      let code = sqlite3_step(statement)
+      guard code == SQLITE_ROW else { throw sqliteError(operation: operation, code: code) }
+      return sqlite3_column_int64(statement, 0)
+    }
+    return count == Int64(ids.count)
   }
 
   private func allAssetsExist(_ ids: [UUID], operation: String) throws -> Bool {
@@ -1325,8 +1765,13 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
     }
   }
 
-  private func scalarInt(sql: String, operation: String) throws -> Int64 {
+  private func scalarInt(
+    sql: String,
+    operation: String,
+    bindValues: ((OpaquePointer) throws -> Void)? = nil
+  ) throws -> Int64 {
     try withStatement(sql, operation: operation) { statement in
+      try bindValues?(statement)
       let code = sqlite3_step(statement)
       guard code == SQLITE_ROW else { throw sqliteError(operation: operation, code: code) }
       return sqlite3_column_int64(statement, 0)
@@ -1814,6 +2259,63 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
     return stack
   }
 
+  private func decodeKeywordNode(_ statement: OpaquePointer, operation: String) throws -> KeywordNode {
+    guard let id = UUID(uuidString: try columnString(statement, column: 0, operation: operation))
+    else {
+      throw CatalogStoreError.decoding(operation: operation, message: "The keyword ID is invalid.")
+    }
+    let name = try columnString(statement, column: 1, operation: operation)
+    let parentID = try optionalColumnString(statement, column: 2).map { value in
+      guard let id = UUID(uuidString: value) else {
+        throw CatalogStoreError.decoding(
+          operation: operation, message: "The keyword parent ID is invalid.")
+      }
+      return id
+    }
+    let normalizedName = try columnString(statement, column: 3, operation: operation)
+    guard
+      let keyword = KeywordNode(
+        id: id,
+        name: name,
+        parentID: parentID,
+        createdAt: optionalDate(statement, column: 4) ?? .distantPast,
+        updatedAt: optionalDate(statement, column: 5) ?? .distantPast
+      ), keyword.normalizedName == normalizedName
+    else {
+      throw CatalogStoreError.decoding(
+        operation: operation, message: "The stored keyword is invalid.")
+    }
+    return keyword
+  }
+
+  private func decodeVirtualCopy(_ statement: OpaquePointer, operation: String) throws -> VirtualCopy {
+    guard let id = UUID(uuidString: try columnString(statement, column: 0, operation: operation))
+    else {
+      throw CatalogStoreError.decoding(
+        operation: operation, message: "The virtual copy ID is invalid.")
+    }
+    guard
+      let sourceAssetID = UUID(
+        uuidString: try columnString(statement, column: 1, operation: operation))
+    else {
+      throw CatalogStoreError.decoding(
+        operation: operation, message: "The virtual copy source asset ID is invalid.")
+    }
+    guard
+      let virtualCopy = VirtualCopy(
+        id: id,
+        sourceAssetID: sourceAssetID,
+        name: try columnString(statement, column: 2, operation: operation),
+        createdAt: optionalDate(statement, column: 3) ?? .distantPast,
+        updatedAt: optionalDate(statement, column: 4) ?? .distantPast
+      )
+    else {
+      throw CatalogStoreError.decoding(
+        operation: operation, message: "The stored virtual copy is invalid.")
+    }
+    return virtualCopy
+  }
+
   private func decodeMetadataPreset(
     _ statement: OpaquePointer,
     operation: String
@@ -1935,17 +2437,24 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
   {
     let shouldUseFTS = ftsAvailabilityOverride ?? (sqlite3_compileoption_used("ENABLE_FTS5") != 0)
     if version == schemaVersion {
-      return try validateVersionThreeSchema(database, shouldUseFTS: shouldUseFTS)
+      return try validateVersionFourSchema(database, shouldUseFTS: shouldUseFTS)
     }
     if version == 1 {
       let ftsAvailable = try validateVersionOneSchema(database, shouldUseFTS: shouldUseFTS)
       try migrateToVersionTwo(database)
       try migrateToVersionThree(database)
+      try migrateToVersionFour(database)
       return ftsAvailable
     }
     if version == 2 {
       let ftsAvailable = try validateVersionTwoSchema(database, shouldUseFTS: shouldUseFTS)
       try migrateToVersionThree(database)
+      try migrateToVersionFour(database)
+      return ftsAvailable
+    }
+    if version == 3 {
+      let ftsAvailable = try validateVersionThreeSchema(database, shouldUseFTS: shouldUseFTS)
+      try migrateToVersionFour(database)
       return ftsAvailable
     }
 
@@ -2031,6 +2540,7 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
     }
     try migrateToVersionTwo(database)
     try migrateToVersionThree(database)
+    try migrateToVersionFour(database)
     return ftsAvailable
   }
 
@@ -2127,6 +2637,67 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
       } catch let rollbackError {
         throw CatalogStoreError.cleanup(
           operation: "catalog.migrate.v3",
+          primaryError: String(describing: primaryError),
+          cleanupError: String(describing: rollbackError)
+        )
+      }
+      throw primaryError
+    }
+  }
+
+  private static func migrateToVersionFour(_ database: OpaquePointer) throws {
+    try execute("BEGIN IMMEDIATE;", database: database, operation: "catalog.migrate.v4.begin")
+    do {
+      try execute(
+        """
+        CREATE TABLE keyword_nodes (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          parent_id TEXT REFERENCES keyword_nodes(id) ON DELETE RESTRICT,
+          normalized_name TEXT NOT NULL,
+          created_ms INTEGER NOT NULL,
+          updated_ms INTEGER NOT NULL
+        );
+        CREATE UNIQUE INDEX keyword_nodes_sibling_name_index
+          ON keyword_nodes(COALESCE(parent_id, ''), normalized_name);
+        CREATE INDEX keyword_nodes_parent_index ON keyword_nodes(parent_id);
+        CREATE TABLE asset_keyword_nodes (
+          asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+          keyword_id TEXT NOT NULL REFERENCES keyword_nodes(id) ON DELETE CASCADE,
+          PRIMARY KEY (asset_id, keyword_id)
+        );
+        CREATE INDEX asset_keyword_nodes_keyword_index
+          ON asset_keyword_nodes(keyword_id);
+        CREATE TABLE virtual_copies (
+          id TEXT PRIMARY KEY,
+          source_asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          created_ms INTEGER NOT NULL,
+          updated_ms INTEGER NOT NULL
+        );
+        CREATE UNIQUE INDEX virtual_copies_source_name_index
+          ON virtual_copies(source_asset_id, name COLLATE NOCASE);
+        CREATE TABLE virtual_copy_recipes (
+          virtual_copy_id TEXT NOT NULL REFERENCES virtual_copies(id) ON DELETE CASCADE,
+          revision INTEGER NOT NULL,
+          date_ms INTEGER NOT NULL,
+          recipe_json BLOB NOT NULL,
+          PRIMARY KEY (virtual_copy_id, revision)
+        );
+        CREATE INDEX virtual_copy_recipes_latest_index
+          ON virtual_copy_recipes(virtual_copy_id, revision DESC, date_ms DESC);
+        PRAGMA user_version=4;
+        """,
+        database: database,
+        operation: "catalog.migrate.v4"
+      )
+      try execute("COMMIT;", database: database, operation: "catalog.migrate.v4.commit")
+    } catch let primaryError {
+      do {
+        try execute("ROLLBACK;", database: database, operation: "catalog.migrate.v4.rollback")
+      } catch let rollbackError {
+        throw CatalogStoreError.cleanup(
+          operation: "catalog.migrate.v4",
           primaryError: String(describing: primaryError),
           cleanupError: String(describing: rollbackError)
         )
@@ -2371,6 +2942,123 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
       "SELECT asset_id FROM collection_assets WHERE collection_id = ? ORDER BY position ASC;",
       "SELECT id, representative_asset_id, is_collapsed, created_ms, updated_ms FROM photo_stacks WHERE id = ?;",
       "SELECT asset_id FROM stack_assets WHERE stack_id = ? ORDER BY position ASC;",
+    ]
+    for query in queries {
+      try validateQuery(database, sql: query)
+    }
+    return ftsAvailable
+  }
+
+  private static func validateVersionFourSchema(
+    _ database: OpaquePointer,
+    shouldUseFTS: Bool
+  ) throws -> Bool {
+    let ftsAvailable = try validateVersionThreeSchema(database, shouldUseFTS: shouldUseFTS)
+    let requiredColumns: [String: [SQLiteSchemaColumn]] = [
+      "keyword_nodes": [
+        .init(position: 0, name: "id", type: "TEXT", isNotNull: false, defaultValue: nil, primaryKeyPosition: 1),
+        .init(position: 1, name: "name", type: "TEXT", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
+        .init(position: 2, name: "parent_id", type: "TEXT", isNotNull: false, defaultValue: nil, primaryKeyPosition: 0),
+        .init(position: 3, name: "normalized_name", type: "TEXT", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
+        .init(position: 4, name: "created_ms", type: "INTEGER", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
+        .init(position: 5, name: "updated_ms", type: "INTEGER", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
+      ],
+      "asset_keyword_nodes": [
+        .init(position: 0, name: "asset_id", type: "TEXT", isNotNull: true, defaultValue: nil, primaryKeyPosition: 1),
+        .init(position: 1, name: "keyword_id", type: "TEXT", isNotNull: true, defaultValue: nil, primaryKeyPosition: 2),
+      ],
+      "virtual_copies": [
+        .init(position: 0, name: "id", type: "TEXT", isNotNull: false, defaultValue: nil, primaryKeyPosition: 1),
+        .init(position: 1, name: "source_asset_id", type: "TEXT", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
+        .init(position: 2, name: "name", type: "TEXT", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
+        .init(position: 3, name: "created_ms", type: "INTEGER", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
+        .init(position: 4, name: "updated_ms", type: "INTEGER", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
+      ],
+      "virtual_copy_recipes": [
+        .init(position: 0, name: "virtual_copy_id", type: "TEXT", isNotNull: true, defaultValue: nil, primaryKeyPosition: 1),
+        .init(position: 1, name: "revision", type: "INTEGER", isNotNull: true, defaultValue: nil, primaryKeyPosition: 2),
+        .init(position: 2, name: "date_ms", type: "INTEGER", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
+        .init(position: 3, name: "recipe_json", type: "BLOB", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
+      ],
+    ]
+    for (table, expected) in requiredColumns {
+      guard try tableExists(database, name: table) else {
+        throw schemaError("The required table '\(table)' is missing.")
+      }
+      guard try tableColumns(database, table: table) == expected else {
+        throw schemaError("The table '\(table)' does not have the exact version-4 columns.")
+      }
+    }
+    let tableSQL: [String: String] = [
+      "keyword_nodes": """
+        CREATE TABLE keyword_nodes (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          parent_id TEXT REFERENCES keyword_nodes(id) ON DELETE RESTRICT,
+          normalized_name TEXT NOT NULL,
+          created_ms INTEGER NOT NULL,
+          updated_ms INTEGER NOT NULL
+        )
+        """,
+      "asset_keyword_nodes": """
+        CREATE TABLE asset_keyword_nodes (
+          asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+          keyword_id TEXT NOT NULL REFERENCES keyword_nodes(id) ON DELETE CASCADE,
+          PRIMARY KEY (asset_id, keyword_id)
+        )
+        """,
+      "virtual_copies": """
+        CREATE TABLE virtual_copies (
+          id TEXT PRIMARY KEY,
+          source_asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          created_ms INTEGER NOT NULL,
+          updated_ms INTEGER NOT NULL
+        )
+        """,
+      "virtual_copy_recipes": """
+        CREATE TABLE virtual_copy_recipes (
+          virtual_copy_id TEXT NOT NULL REFERENCES virtual_copies(id) ON DELETE CASCADE,
+          revision INTEGER NOT NULL,
+          date_ms INTEGER NOT NULL,
+          recipe_json BLOB NOT NULL,
+          PRIMARY KEY (virtual_copy_id, revision)
+        )
+        """,
+    ]
+    for (table, expectedSQL) in tableSQL {
+      try validateSchemaSQL(database, object: table, type: "table", expectedSQL: expectedSQL)
+    }
+    let indexes: [String: String] = [
+      "keyword_nodes_sibling_name_index": "CREATE UNIQUE INDEX keyword_nodes_sibling_name_index ON keyword_nodes(COALESCE(parent_id, ''), normalized_name)",
+      "keyword_nodes_parent_index": "CREATE INDEX keyword_nodes_parent_index ON keyword_nodes(parent_id)",
+      "asset_keyword_nodes_keyword_index": "CREATE INDEX asset_keyword_nodes_keyword_index ON asset_keyword_nodes(keyword_id)",
+      "virtual_copies_source_name_index": "CREATE UNIQUE INDEX virtual_copies_source_name_index ON virtual_copies(source_asset_id, name COLLATE NOCASE)",
+      "virtual_copy_recipes_latest_index": "CREATE INDEX virtual_copy_recipes_latest_index ON virtual_copy_recipes(virtual_copy_id, revision DESC, date_ms DESC)",
+    ]
+    for (index, expectedSQL) in indexes {
+      try validateSchemaSQL(database, object: index, type: "index", expectedSQL: expectedSQL)
+    }
+    try validateForeignKey(
+      database,
+      table: "keyword_nodes",
+      column: "parent_id",
+      referencedTable: "keyword_nodes",
+      deleteAction: "RESTRICT"
+    )
+    try validateForeignKey(
+      database, table: "asset_keyword_nodes", column: "asset_id", referencedTable: "assets")
+    try validateForeignKey(
+      database, table: "asset_keyword_nodes", column: "keyword_id", referencedTable: "keyword_nodes")
+    try validateForeignKey(
+      database, table: "virtual_copies", column: "source_asset_id", referencedTable: "assets")
+    try validateForeignKey(
+      database, table: "virtual_copy_recipes", column: "virtual_copy_id", referencedTable: "virtual_copies")
+    let queries = [
+      "SELECT id, name, parent_id, normalized_name, created_ms, updated_ms FROM keyword_nodes WHERE id = ?;",
+      "SELECT keyword_id FROM asset_keyword_nodes WHERE asset_id = ? ORDER BY keyword_id ASC;",
+      "SELECT id, source_asset_id, name, created_ms, updated_ms FROM virtual_copies WHERE id = ?;",
+      "SELECT recipe_json FROM virtual_copy_recipes WHERE virtual_copy_id = ? ORDER BY revision DESC, date_ms DESC LIMIT 1;",
     ]
     for query in queries {
       try validateQuery(database, sql: query)
@@ -2761,7 +3449,8 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
     _ database: OpaquePointer,
     table: String,
     column: String,
-    referencedTable: String
+    referencedTable: String,
+    deleteAction: String = "CASCADE"
   ) throws {
     try withStaticStatement(
       database, sql: "PRAGMA foreign_key_list(\(table));", operation: "catalog.validate.foreignKey"
@@ -2775,8 +3464,8 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
         }
         let target = sqlite3_column_text(statement, 2).map { String(cString: $0) }
         let source = sqlite3_column_text(statement, 3).map { String(cString: $0) }
-        let deleteAction = sqlite3_column_text(statement, 6).map { String(cString: $0) }
-        if source == column && target == referencedTable && deleteAction == "CASCADE" { return }
+        let actualDeleteAction = sqlite3_column_text(statement, 6).map { String(cString: $0) }
+        if source == column && target == referencedTable && actualDeleteAction == deleteAction { return }
       }
       throw schemaError("The table '\(table)' does not have the required cascading foreign key.")
     }
