@@ -44,7 +44,8 @@ contains these tested components:
   discovery, and native print routing.
 
 The interface can review local import selections with duplicate states, browse a
-catalog, apply basic and baseline Develop groups, crop and rotate, compare before
+catalog, relink a missing source after fingerprint validation, apply basic and
+baseline Develop groups, author local mask graphs, crop and rotate, compare before
 and after, inspect
 the histogram and three-way colour grade, author versioned masks, edit
 catalog metadata, and write JPEG, PNG, HEIF, or TIFF output through Deliver.
