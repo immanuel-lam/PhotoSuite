@@ -1116,18 +1116,19 @@ public final class PhotoWorkspace {
       case .shadows: 3
       case .saturation: 4
       case .threeWayColorGrade: 5
-      case .normalizedCrop: 6
-      case .rotationDegrees: 7
-      case .toneCurve: 8
-      case .whiteBalance: 9
-      case .transform: 10
-      case .detail: 11
-      case .optics: 12
-      case .effects: 13
-      case .calibration: 14
-      case .blackAndWhite: 15
-      case .hdr: 16
-      case .unknown: 17
+      case .maskedAdjustment: 6
+      case .normalizedCrop: 7
+      case .rotationDegrees: 8
+      case .toneCurve: 9
+      case .whiteBalance: 10
+      case .transform: 11
+      case .detail: 12
+      case .optics: 13
+      case .effects: 14
+      case .calibration: 15
+      case .blackAndWhite: 16
+      case .hdr: 17
+      case .unknown: 18
       }
     }
     return operations.enumerated().sorted { left, right in

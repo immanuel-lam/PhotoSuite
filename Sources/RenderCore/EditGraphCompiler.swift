@@ -114,6 +114,38 @@ enum EditGraphCompiler {
       case .threeWayColorGrade(let grade):
         image = try ThreeWayColorGradeRenderer.apply(image, grade: grade, index: index)
 
+      case .maskedAdjustment(let adjustment):
+        guard let mask = recipe.masks.first(where: { $0.id == adjustment.maskID }) else {
+          throw RenderCoreError.invalidOperationValue(index: index, operation: "maskedAdjustment")
+        }
+        guard case .version1(let graph) = try mask.decodeGraphPayload() else {
+          throw RenderCoreError.invalidOperationValue(index: index, operation: "maskedAdjustment")
+        }
+        let maskImage = try LocalMaskRenderer.apply(
+          image,
+          graph: graph,
+          definitionIsInverted: mask.isInverted,
+          index: index
+        )
+        var localImage = image
+        if adjustment.exposureEV != 0 {
+          let filter = CIFilter.exposureAdjust()
+          filter.inputImage = localImage
+          filter.ev = Float(adjustment.exposureEV)
+          localImage = try output(of: filter, index: index, operation: "maskedExposure")
+        }
+        localImage = try ThreeWayColorGradeRenderer.apply(
+          localImage,
+          grade: adjustment.colorGrade,
+          index: index
+        )
+        image = try LocalMaskRenderer.blend(
+          foreground: localImage,
+          background: image,
+          mask: maskImage,
+          index: index
+        )
+
       case .normalizedCrop(let crop):
         image = try cropImage(image, crop: crop, index: index)
 

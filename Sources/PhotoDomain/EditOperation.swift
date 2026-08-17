@@ -9,6 +9,7 @@ public enum EditOperation: Codable, Hashable, Sendable {
   case shadows(Double)
   case saturation(Double)
   case threeWayColorGrade(ThreeWayColorGrade)
+  case maskedAdjustment(MaskedAdjustmentV1)
   case normalizedCrop(NormalizedRect)
   case rotationDegrees(Double)
   case toneCurve(ToneCurveAdjustmentV1)
@@ -29,6 +30,7 @@ public enum EditOperation: Codable, Hashable, Sendable {
     "shadows",
     "saturation",
     "threeWayColorGrade",
+    "maskedAdjustment",
     "normalizedCrop",
     "rotationDegrees",
     "toneCurve",
@@ -66,6 +68,11 @@ public enum EditOperation: Codable, Hashable, Sendable {
       self = .saturation(try container.decode(Double.self, forKey: valueKey))
     case ("threeWayColorGrade", false):
       self = .threeWayColorGrade(try container.decode(ThreeWayColorGrade.self, forKey: gradeKey))
+    case ("maskedAdjustment", false)
+    where Self.hasVersionOneAdjustment(container, key: adjustmentKey):
+      self = .maskedAdjustment(
+        try container.decode(MaskedAdjustmentV1.self, forKey: adjustmentKey)
+      )
     case ("normalizedCrop", false):
       self = .normalizedCrop(try container.decode(NormalizedRect.self, forKey: rectKey))
     case ("rotationDegrees", false):
@@ -135,6 +142,9 @@ public enum EditOperation: Codable, Hashable, Sendable {
     case .threeWayColorGrade(let grade):
       try container.encode("threeWayColorGrade", forKey: kindKey)
       try container.encode(grade, forKey: gradeKey)
+    case .maskedAdjustment(let adjustment):
+      try container.encode("maskedAdjustment", forKey: kindKey)
+      try container.encode(adjustment, forKey: adjustmentKey)
     case .normalizedCrop(let rect):
       try container.encode("normalizedCrop", forKey: kindKey)
       try container.encode(rect, forKey: rectKey)
