@@ -387,6 +387,7 @@ public enum PhotoWorkspaceError: Error, Equatable, LocalizedError, Sendable {
   case metadataStoreUnavailable
   case libraryStoreUnavailable
   case peopleStoreUnavailable
+  case previewUnavailable
   case staleAIResult
   case noSelection(operation: String)
   case unknownOperationsBlockEditing
@@ -407,6 +408,8 @@ public enum PhotoWorkspaceError: Error, Equatable, LocalizedError, Sendable {
       "The current catalog does not support durable Library collections and stacks."
     case .peopleStoreUnavailable:
       "The current catalog does not support durable face annotations."
+    case .previewUnavailable:
+      "Render a preview before running local AI on the selected photograph."
     case .staleAIResult:
       "The photograph changed while the local AI result was being generated."
     case .noSelection(let operation): "Select a photograph before you use \(operation)."

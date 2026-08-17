@@ -653,6 +653,35 @@ final class PhotoWorkspaceTests: XCTestCase {
     XCTAssertEqual(workspace.lastError, .staleAIResult)
   }
 
+  func testLocalAIPreviewValidationUsesBalancedSourceAccess() async throws {
+    let asset = makeAsset(name: "local-ai.jpg")
+    let catalog = CatalogSpy(assets: [asset], recipes: [asset.id: makeRecipe(assetID: asset.id)])
+    let access = SourceAccessSpy()
+    let workspace = makeWorkspace(catalog: catalog, access: access)
+    await workspace.reopen()
+
+    let prepared = try await workspace.prepareSelectedPreviewForLocalAI()
+
+    XCTAssertEqual(prepared.pixelDimensions, workspace.preview?.pixelDimensions)
+    let activeAccessCount = await access.activeAccessCount()
+    XCTAssertEqual(activeAccessCount, 0)
+  }
+
+  func testLocalAIPreviewValidationReportsMissingPreviewAsTypedWorkspaceError() async throws {
+    let asset = makeAsset(name: "local-ai-without-preview.jpg")
+    let workspace = makeWorkspace()
+    workspace.assets = [asset]
+    workspace.selectedAssetID = asset.id
+    workspace.currentRecipe = makeRecipe(assetID: asset.id)
+
+    do {
+      _ = try await workspace.prepareSelectedPreviewForLocalAI()
+      XCTFail("A local AI input requires a selected rendered preview.")
+    } catch let error as PhotoWorkspaceError {
+      XCTAssertEqual(error, .previewUnavailable)
+    }
+  }
+
   func testNewPreviewCancelsAndSuppressesStalePreview() async throws {
     let asset = makeAsset(name: "preview.jpg")
     let initial = makeRecipe(assetID: asset.id)

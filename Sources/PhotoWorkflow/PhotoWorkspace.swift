@@ -1541,6 +1541,31 @@ public final class PhotoWorkspace {
     }
   }
 
+  /// Returns the selected rendered frame only after the source bookmark has
+  /// been resolved through the normal security-scoped access path. The AI
+  /// provider receives this source-backed preview, never a URL that it can
+  /// access outside the workspace boundary. Access is balanced even when a
+  /// provider-facing input check fails.
+  public func prepareSelectedPreviewForLocalAI() async throws -> PreviewFrame {
+    guard let asset = selectedAsset else {
+      throw PhotoWorkspaceError.noSelection(operation: "local AI")
+    }
+    guard let preview else {
+      throw PhotoWorkspaceError.previewUnavailable
+    }
+
+    let sourceURL = try await sourceAccess.resolve(asset)
+    let started = await sourceAccess.start(sourceURL)
+    do {
+      try Task.checkCancellation()
+      if started { await sourceAccess.stop(sourceURL) }
+      return preview
+    } catch {
+      if started { await sourceAccess.stop(sourceURL) }
+      throw error
+    }
+  }
+
   public func rotateClockwise() async {
     await enqueueEditMutation { [weak self] in await self?.performRotateClockwise() }
   }

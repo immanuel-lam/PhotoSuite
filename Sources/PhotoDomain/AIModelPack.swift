@@ -21,6 +21,16 @@ public enum AIModelKind: String, Codable, CaseIterable, Hashable, Sendable, Iden
   case reflectionRemoval
 
   public var id: Self { self }
+
+  /// Durable recipe kind used by local semantic masks. Subject and People
+  /// remain `.subject` at the recipe boundary; the provider-specific
+  /// distinction is carried by the model request and payload.
+  public var visionMaskKind: MaskKind? {
+    switch self {
+    case .subject, .people: .subject
+    default: nil
+    }
+  }
 }
 
 public enum AIModelLicense: String, Codable, CaseIterable, Hashable, Sendable {

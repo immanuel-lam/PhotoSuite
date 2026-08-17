@@ -4,6 +4,7 @@
 
 import Foundation
 import PhotoDomain
+import RenderCore
 
 enum MaskAuthoringAvailability: String, Codable, Hashable, Sendable {
   case available
@@ -20,6 +21,7 @@ enum MaskAuthoringTool: String, CaseIterable, Hashable, Identifiable, Sendable {
   case luminanceRange
   case depthRange
   case subject
+  case people
   case sky
   case background
   case object
@@ -31,7 +33,29 @@ enum MaskAuthoringTool: String, CaseIterable, Hashable, Identifiable, Sendable {
   }
 
   static var smartTools: [Self] {
-    [.subject, .sky, .background, .object]
+    [.subject, .people, .sky, .background, .object]
+  }
+
+  var aiModelKind: AIModelKind? {
+    switch self {
+    case .subject: .subject
+    case .people: .people
+    case .sky: .sky
+    case .background: .background
+    case .object: .object
+    default: nil
+    }
+  }
+
+  /// The built-in Vision request represented by this authoring tool. The
+  /// payload remains a `.subject` MaskKind because the durable recipe stores
+  /// the provider-specific person/subject distinction in its versioned data.
+  var visionKind: VisionAIMaskKind? {
+    switch self {
+    case .subject: .subject
+    case .people: .person
+    default: nil
+    }
   }
 
   var kind: MaskKind {
@@ -42,7 +66,7 @@ enum MaskAuthoringTool: String, CaseIterable, Hashable, Identifiable, Sendable {
     case .colorRange: .colorRange
     case .luminanceRange: .luminanceRange
     case .depthRange: .depthRange
-    case .subject: .subject
+    case .subject, .people: aiModelKind?.visionMaskKind ?? .subject
     case .sky: .sky
     case .background: .background
     case .object: .object
@@ -58,6 +82,7 @@ enum MaskAuthoringTool: String, CaseIterable, Hashable, Identifiable, Sendable {
     case .luminanceRange: "Luminance"
     case .depthRange: "Depth"
     case .subject: "Subject"
+    case .people: "People"
     case .sky: "Sky"
     case .background: "Background"
     case .object: "Object"
@@ -72,7 +97,7 @@ enum MaskAuthoringTool: String, CaseIterable, Hashable, Identifiable, Sendable {
     case .colorRange: "Sample colour"
     case .luminanceRange: "Brightness"
     case .depthRange: "Depth map"
-    case .subject, .sky, .background, .object: "Smart selection"
+    case .subject, .people, .sky, .background, .object: "Smart selection"
     }
   }
 
@@ -84,7 +109,7 @@ enum MaskAuthoringTool: String, CaseIterable, Hashable, Identifiable, Sendable {
     case .colorRange: "eyedropper"
     case .luminanceRange: "sun.max"
     case .depthRange: "square.3.layers.3d"
-    case .subject: "person.crop.rectangle"
+    case .subject, .people: "person.crop.rectangle"
     case .sky: "cloud.sun"
     case .background: "photo.on.rectangle"
     case .object: "cube"
@@ -93,7 +118,8 @@ enum MaskAuthoringTool: String, CaseIterable, Hashable, Identifiable, Sendable {
 
   var availability: MaskAuthoringAvailability {
     switch self {
-    case .depthRange, .subject, .sky, .background, .object: .unavailable
+    case .depthRange, .sky, .background, .object: .unavailable
+    case .subject, .people: .available
     case .brush, .linearGradient, .radialGradient, .colorRange, .luminanceRange: .available
     }
   }
@@ -101,15 +127,13 @@ enum MaskAuthoringTool: String, CaseIterable, Hashable, Identifiable, Sendable {
   var unavailableReason: String? {
     switch self {
     case .depthRange:
-      "Depth range needs a depth map. The current image contract does not provide one."
-    case .subject:
-      "Subject selection needs a local model result. It is not inferred by this inspector."
+      VisionSemanticMaskService.capability(for: .depth).reason
     case .sky:
-      "Sky selection needs an optional local model pack. No model is installed."
+      VisionSemanticMaskService.capability(for: .sky).reason
     case .background:
-      "Background selection needs an optional local model pack. No model is installed."
+      VisionSemanticMaskService.capability(for: .background).reason
     case .object:
-      "Object selection needs an optional local model pack. No model is installed."
+      VisionSemanticMaskService.capability(for: .object).reason
     default: nil
     }
   }

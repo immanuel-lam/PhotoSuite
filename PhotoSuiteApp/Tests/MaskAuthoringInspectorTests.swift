@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import PhotoDomain
+import RenderCore
 import SwiftUI
 import Testing
 
@@ -20,11 +21,38 @@ struct MaskAuthoringInspectorTests {
         .luminanceRange,
         .depthRange,
       ])
-    #expect(MaskAuthoringTool.subject.availability == .unavailable)
+    #expect(MaskAuthoringTool.subject.availability == .available)
     #expect(MaskAuthoringTool.sky.availability == .unavailable)
     #expect(MaskAuthoringTool.background.availability == .unavailable)
     #expect(MaskAuthoringTool.object.availability == .unavailable)
     #expect(MaskAuthoringTool.depthRange.availability == .unavailable)
+  }
+
+  @Test
+  func authoringCatalogRoutesSubjectAndPeopleToSystemVisionAndExplainsUnsupportedTools() {
+    #expect(MaskAuthoringTool.smartTools == [.subject, .people, .sky, .background, .object])
+    #expect(MaskAuthoringTool.subject.visionKind == .subject)
+    #expect(MaskAuthoringTool.people.visionKind == .person)
+    #expect(MaskAuthoringTool.people.kind == .subject)
+    #expect(MaskAuthoringTool.subject.availability == .available)
+    #expect(MaskAuthoringTool.people.availability == .available)
+
+    #expect(
+      MaskAuthoringTool.sky.unavailableReason
+        == VisionSemanticMaskService.capability(for: .sky).reason
+    )
+    #expect(
+      MaskAuthoringTool.object.unavailableReason
+        == VisionSemanticMaskService.capability(for: .object).reason
+    )
+    #expect(
+      MaskAuthoringTool.background.unavailableReason
+        == VisionSemanticMaskService.capability(for: .background).reason
+    )
+    #expect(
+      MaskAuthoringTool.depthRange.unavailableReason
+        == VisionSemanticMaskService.capability(for: .depth).reason
+    )
   }
 
   @Test
@@ -106,6 +134,14 @@ struct MaskAuthoringInspectorTests {
           .buttonStyle(.glass)
       }
     }
+  }
+
+  @MainActor
+  @Test
+  func inspectorExposesLocalAIActionAndStatusContracts() {
+    #expect(ModernUIAccessibility.maskAuthoringAIAction == "mask-authoring-ai-action")
+    #expect(ModernUIAccessibility.maskAuthoringAIStatus == "mask-authoring-ai-status")
+    _ = MaskAuthoringInspector.self
   }
 
   @Test

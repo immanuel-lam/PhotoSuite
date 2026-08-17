@@ -126,13 +126,7 @@ private struct AIModelActionRow: View {
     guard
       let kind = visionKind,
       let asset = workspace.selectedAsset,
-      let recipe = workspace.currentRecipe,
-      let preview = workspace.preview,
-      let dimensions = PixelDimensions(
-        width: preview.pixelDimensions.width,
-        height: preview.pixelDimensions.height
-      ),
-      let image = makeImageBuffer(preview.imageData, dimensions: dimensions)
+      let recipe = workspace.currentRecipe
     else {
       statusMessage = "Select a photograph with a rendered preview first."
       return
@@ -149,10 +143,22 @@ private struct AIModelActionRow: View {
       requestID: UUID()
     )
     do {
+      let preview = try await workspace.prepareSelectedPreviewForLocalAI()
+      guard
+        let dimensions = PixelDimensions(
+          width: preview.pixelDimensions.width,
+          height: preview.pixelDimensions.height
+        ),
+        let image = makeImageBuffer(preview.imageData, dimensions: dimensions)
+      else {
+        throw VisionAIMaskError.invalidImageBuffer(
+          "the rendered preview could not be converted to RGBA8"
+        )
+      }
       let result = try await VisionAIModelService().generateMask(
         VisionAIMaskRequest(identity: identity, image: image, kind: kind)
       )
-      guard result.identity == identity else {
+      guard MaskResultGate.accepts(result, for: identity) else {
         statusMessage = "The local AI result was stale and was discarded."
         return
       }

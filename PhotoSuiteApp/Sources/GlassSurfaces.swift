@@ -28,6 +28,8 @@ enum ModernUIAccessibility {
   static let maskAuthoringToolPicker = "mask-authoring-tool-picker"
   static let maskAuthoringOperationPicker = "mask-authoring-operation-picker"
   static let maskAuthoringUnavailable = "mask-authoring-unavailable"
+  static let maskAuthoringAIAction = "mask-authoring-ai-action"
+  static let maskAuthoringAIStatus = "mask-authoring-ai-status"
   static let adjustmentExposure = "adjustment-exposure"
   static let exportJPEGButton = "export-jpeg-button"
   static let deliverBatchExportButton = "deliver-batch-export-button"

@@ -2,8 +2,12 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+import CoreGraphics
+import Foundation
+import ImageIO
 import PhotoDomain
 import PhotoWorkflow
+import RenderCore
 import SwiftUI
 
 @MainActor
@@ -12,6 +16,9 @@ struct MaskAuthoringInspector: View {
   @State private var selectedTool: MaskAuthoringTool = .brush
   @State private var selectedOperation: MaskCombinationOperation = .add
   @State private var selectedMaskID: UUID?
+  @State private var isGeneratingAIMask = false
+  @State private var aiStatusMessage: String?
+  @State private var aiTask: Task<Void, Never>?
 
   private var selectedMask: MaskDefinition? {
     guard let selectedMaskID else { return nil }
@@ -32,17 +39,42 @@ struct MaskAuthoringInspector: View {
               .foregroundStyle(.secondary)
           }
           Spacer(minLength: 8)
-          Button {
-            addMask()
-          } label: {
-            Label("New mask", systemImage: "plus")
+          Button(action: createMask) {
+            Label(
+              selectedTool.visionKind == nil
+                ? "New mask"
+                : (isGeneratingAIMask ? "Generating…" : "Generate \(selectedTool.title)"),
+              systemImage: selectedTool.visionKind == nil ? "plus" : "wand.and.stars"
+            )
           }
           .modifier(GlassButtonWhenAvailable(prominent: true))
-          .disabled(!selectedTool.availability.isAvailable || workspace.selectedAsset == nil)
-          .accessibilityIdentifier("mask-authoring-new-mask")
+          .disabled(
+            !selectedTool.availability.isAvailable
+              || workspace.selectedAsset == nil
+              || (selectedTool.visionKind != nil && workspace.preview == nil)
+              || isGeneratingAIMask
+          )
+          .accessibilityIdentifier(
+            selectedTool.visionKind == nil
+              ? "mask-authoring-new-mask"
+              : ModernUIAccessibility.maskAuthoringAIAction
+          )
         }
       }
       .padding(.bottom, 14)
+
+      if let aiStatusMessage {
+        Label {
+          Text(aiStatusMessage)
+            .fixedSize(horizontal: false, vertical: true)
+        } icon: {
+          Image(systemName: isGeneratingAIMask ? "arrow.triangle.2.circlepath" : "info.circle")
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .accessibilityIdentifier(ModernUIAccessibility.maskAuthoringAIStatus)
+        .padding(.bottom, 10)
+      }
 
       ScrollView {
         VStack(alignment: .leading, spacing: 16) {
@@ -50,7 +82,7 @@ struct MaskAuthoringInspector: View {
           operationSection
           maskListSection
           Text(
-            "Manual masks are stored as version-one MaskGraph recipes. Smart selections remain unavailable until a verified local model is installed."
+            "Manual masks are stored as version-one MaskGraph recipes. Subject and People run through Apple Vision locally; Sky, Background, Object, and Depth remain explicit capability states."
           )
           .font(.caption2)
           .foregroundStyle(.tertiary)
@@ -80,7 +112,7 @@ struct MaskAuthoringInspector: View {
           MaskToolTile(
             tool: tool,
             isSelected: selectedTool == tool,
-            action: { selectedTool = tool }
+            action: { selectTool(tool) }
           )
         }
       }
@@ -96,7 +128,7 @@ struct MaskAuthoringInspector: View {
           MaskToolTile(
             tool: tool,
             isSelected: selectedTool == tool,
-            action: { selectedTool = tool }
+            action: { selectTool(tool) }
           )
         }
       }
@@ -119,7 +151,7 @@ struct MaskAuthoringInspector: View {
         }
       }
       .pickerStyle(.segmented)
-      .disabled(selectedTool.availability == .unavailable || selectedMask == nil)
+      .disabled(!canComposeSelectedTool || selectedMask == nil)
       .accessibilityIdentifier(ModernUIAccessibility.maskAuthoringOperationPicker)
 
       HStack(spacing: 8) {
@@ -131,7 +163,7 @@ struct MaskAuthoringInspector: View {
         .modifier(GlassButtonWhenAvailable(prominent: true))
         .disabled(
           selectedMask == nil
-            || selectedTool.availability == .unavailable
+            || !canComposeSelectedTool
             || workspace.selectedAsset == nil
         )
         .accessibilityIdentifier("mask-authoring-apply-operation")
@@ -147,7 +179,11 @@ struct MaskAuthoringInspector: View {
         .accessibilityIdentifier("mask-authoring-invert")
       }
 
-      if selectedMask == nil {
+      if selectedTool.visionKind != nil {
+        Text("Generate a local Vision mask before combining another selection.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      } else if selectedMask == nil {
         Text("Create or select a mask before adding another component.")
           .font(.caption)
           .foregroundStyle(.secondary)
@@ -208,6 +244,131 @@ struct MaskAuthoringInspector: View {
         expectedRevision: revision
       )
     }
+  }
+
+  private var canComposeSelectedTool: Bool {
+    selectedTool.availability.isAvailable && selectedTool.visionKind == nil
+  }
+
+  private func selectTool(_ tool: MaskAuthoringTool) {
+    selectedTool = tool
+    if tool.visionKind == nil {
+      aiStatusMessage = nil
+    }
+  }
+
+  private func createMask() {
+    guard selectedTool.availability.isAvailable else { return }
+    if let visionKind = selectedTool.visionKind {
+      generateVisionMask(kind: visionKind)
+    } else {
+      addMask()
+    }
+  }
+
+  private func generateVisionMask(kind: VisionAIMaskKind) {
+    guard
+      let asset = workspace.selectedAsset,
+      let recipe = workspace.currentRecipe
+    else {
+      aiStatusMessage =
+        PhotoWorkspaceError.noSelection(operation: "local AI").localizedDescription
+      return
+    }
+
+    aiTask?.cancel()
+    isGeneratingAIMask = true
+    aiStatusMessage = "Preparing a source-backed preview…"
+    let identity = MaskRequestIdentity(
+      revision: MaskRevisionIdentity(
+        assetID: asset.id,
+        maskID: UUID(),
+        revision: recipe.revision
+      ),
+      requestID: UUID()
+    )
+
+    aiTask = Task { @MainActor in
+      defer {
+        isGeneratingAIMask = false
+        aiTask = nil
+      }
+
+      do {
+        let preview = try await workspace.prepareSelectedPreviewForLocalAI()
+        guard let image = makeImageBuffer(from: preview) else {
+          throw VisionAIMaskError.invalidImageBuffer(
+            "the rendered preview could not be converted to RGBA8"
+          )
+        }
+
+        aiStatusMessage = "Running Apple Vision locally…"
+        let result = try await VisionAIModelService().generateMask(
+          VisionAIMaskRequest(identity: identity, image: image, kind: kind)
+        )
+        guard MaskResultGate.accepts(result, for: identity) else {
+          aiStatusMessage = "The local AI result was stale and was discarded."
+          return
+        }
+        guard
+          workspace.selectedAssetID == identity.revision.assetID,
+          workspace.currentRecipe?.revision == identity.revision.revision
+        else {
+          aiStatusMessage =
+            "The photograph changed while local AI was running. The result was discarded."
+          return
+        }
+
+        await workspace.applyGeneratedMask(
+          result.mask,
+          assetID: identity.revision.assetID,
+          expectedRevision: identity.revision.revision
+        )
+        guard workspace.lastError != .staleAIResult else {
+          aiStatusMessage = workspace.lastError?.localizedDescription
+          return
+        }
+        selectedMaskID = result.mask.id
+        aiStatusMessage = "\(selectedTool.title) mask applied to the recipe."
+      } catch is CancellationError {
+        aiStatusMessage = "Local AI was cancelled."
+      } catch {
+        aiStatusMessage = error.localizedDescription
+      }
+    }
+  }
+
+  private func makeImageBuffer(from preview: PreviewFrame) -> ImageBuffer? {
+    let dimensions = preview.pixelDimensions
+    guard
+      let source = CGImageSourceCreateWithData(preview.imageData as CFData, nil),
+      let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
+      image.width == dimensions.width,
+      image.height == dimensions.height,
+      let context = CGContext(
+        data: nil,
+        width: dimensions.width,
+        height: dimensions.height,
+        bitsPerComponent: 8,
+        bytesPerRow: dimensions.width * 4,
+        space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+      ),
+      let contextData = context.data
+    else {
+      return nil
+    }
+    context.draw(
+      image,
+      in: CGRect(x: 0, y: 0, width: dimensions.width, height: dimensions.height)
+    )
+    return ImageBuffer(
+      data: Data(bytes: contextData, count: dimensions.width * dimensions.height * 4),
+      dimensions: dimensions,
+      bytesPerRow: UInt(dimensions.width * 4),
+      pixelFormat: .rgba8,
+      colorSpaceName: "sRGB"
+    )
   }
 
   private func applySelectedOperation() {
