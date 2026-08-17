@@ -1,14 +1,15 @@
 # PhotoSuite
 
-PhotoSuite is a planned native macOS photograph workflow application.
-It will use Swift, SwiftUI, AppKit, Core Image, Metal, ColorSync, and
-SQLite. It is not an Electron or Mac Catalyst application.
+PhotoSuite is a native macOS photograph workflow application in pre-alpha.
+It uses Swift, SwiftUI, AppKit, Core Image, Metal, ColorSync, MapKit,
+AVFoundation, PDFKit, and SQLite. It is not an Electron or Mac Catalyst
+application.
 
 ## Current status
 
 This pre-alpha revision contains a native SwiftUI and AppKit application
-with early Library, Develop, and Deliver screens. It also contains these
-tested components:
+with Library, Develop, Deliver, and Professional Workspace screens. It also
+contains these tested components:
 
 - PhotoDomain contracts, including versioned mask data and AI-service
   request and result contracts;
@@ -22,28 +23,33 @@ tested components:
   white-balance, transform, detail, optics, effects, calibration,
   black-and-white, and HDR-intent operations; and
 - atomic sRGB JPEG delivery with tested resize, metadata, text-watermark,
-  and output-sharpening options.
+  and output-sharpening options; and
+- MapKit GPS markers, AVFoundation device discovery, native print routing,
+  and explicit unavailable-state previews for book, slideshow, web gallery,
+  plug-in, Adobe migration, and tethered-capture features.
 
-The early interface can import local sources, browse a catalog, apply the
-five basic Develop controls, crop and rotate, compare before and after, and
-write a JPEG through Deliver. Session collections and stacks are not durable.
-Advanced Develop operations, histogram, and three-way colour-grade controls
-remain pre-alpha. Only the basic controls are part of the current early
-workflow, and all advanced controls require workflow validation.
+The interface can import local sources, browse a catalog, apply basic and
+baseline Develop groups, crop and rotate, compare before and after, inspect
+the histogram and three-way colour grade, author versioned masks, and write
+a JPEG through Deliver. Session collections and stacks are not durable.
+The baseline controls and mask contracts are pre-alpha workflow evidence;
+they are not a Lightroom-equivalent implementation.
 
-Mask data and stale-result validation exist, but there is no mask authoring,
-mask rendering, healing, red-eye, or local-adjustment interface. AI contracts
-exist, but no model pack, model execution, or generative function exists. A
-common-image preview fallback is available when a source is not accepted as
-RAW; this is not a supported-camera list. A licensed real RAW fixture is
+Mask data, authoring, duplicate/synchronise requests, and stale-result
+validation exist, but mask rasterisation, local-adjustment compositing,
+healing, and red-eye remain incomplete. AI contracts and status controls
+exist, but no verified model pack, inference, or generative function exists.
+A common-image preview fallback is available when a source is not accepted
+as RAW; this is not a supported-camera list. A licensed real RAW fixture is
 absent, so the real RAW fixture test is skipped.
 
-The project has no Lightroom parity claim. Tethering, print templates,
-colour-managed soft proofing, book or web workflows, cloud services, mobile
-or web clients, plug-in compatibility, and output formats other than the
-implemented JPEG path remain unimplemented or out of scope. There is no
-signed, notarized, reproducible, or published application release. Do not use
-this pre-alpha revision for production photographs.
+The project has no Lightroom parity claim. Full tethered capture, print
+templates and soft proofing, book export, web publishing, plug-in hosting,
+Adobe migration, AI execution, healing, and production support for other
+formats remain incomplete. Cloud services, mobile clients, and web editing
+are out of scope. There is no signed, notarized, reproducible, or published
+application release. Do not use this pre-alpha revision for production
+photographs.
 
 The comparison baseline is Adobe Lightroom Classic 15.4.1. PhotoSuite
 does not claim feature, file-format, performance, workflow, plug-in, or
