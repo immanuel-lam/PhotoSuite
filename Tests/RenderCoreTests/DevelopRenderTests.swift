@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import CoreGraphics
+import CryptoKit
 import Foundation
 import PhotoDomain
 import XCTest
@@ -163,6 +164,54 @@ final class DevelopRenderTests: XCTestCase {
     let adjusted = try await render(fixture.source, operations: [.hdr(adjustment)])
 
     XCTAssertEqual(try pixels(adjusted), try pixels(baseline))
+  }
+
+  func testColorGradeCompositeHasPinnedRenderDigest() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let tone = try XCTUnwrap(
+      ToneCurveAdjustmentV1(
+        blackPoint: 0.08,
+        shadows: 0.3,
+        midtones: 0.58,
+        highlights: 0.82,
+        whitePoint: 0.96
+      )
+    )
+    let whiteBalance = try XCTUnwrap(WhiteBalanceAdjustmentV1(temperature: 0.2, tint: -0.1))
+    let calibration = try XCTUnwrap(
+      CalibrationAdjustmentV1(redGain: 0.15, greenGain: -0.05, blueGain: 0.1)
+    )
+    let blackAndWhite = try XCTUnwrap(
+      BlackAndWhiteAdjustmentV1(redWeight: 0.25, greenWeight: 0.65, blueWeight: 0.1)
+    )
+    let grade = try XCTUnwrap(
+      ThreeWayColorGrade(
+        shadows: try XCTUnwrap(
+          ThreeWayColorGrade.Tone(hueDegrees: 210, chroma: 0.08, luminance: -0.03)
+        ),
+        midtones: try XCTUnwrap(
+          ThreeWayColorGrade.Tone(hueDegrees: 35, chroma: 0.05, luminance: 0)
+        ),
+        highlights: try XCTUnwrap(
+          ThreeWayColorGrade.Tone(hueDegrees: 50, chroma: 0.1, luminance: 0.03)
+        )
+      )
+    )
+
+    let image = try await render(
+      fixture.source,
+      operations: [
+        .threeWayColorGrade(grade),
+        .toneCurve(tone),
+        .whiteBalance(whiteBalance),
+        .calibration(calibration),
+        .blackAndWhite(blackAndWhite),
+      ]
+    )
+    let digest = SHA256.hash(data: try pixels(image)).map { String(format: "%02x", $0) }.joined()
+
+    XCTAssertEqual(digest, "d180ff4701710bc66ccbe119b10b74ffa02c74be00b160aaac6e2a7077e35818")
   }
 
   private func makeFixture() throws -> (directory: URL, source: URL) {

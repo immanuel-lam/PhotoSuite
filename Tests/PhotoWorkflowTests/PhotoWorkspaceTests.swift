@@ -288,6 +288,68 @@ final class PhotoWorkspaceTests: XCTestCase {
     )
   }
 
+  func testAllBaselineDevelopFamiliesPersistInCanonicalOrderAcrossReopen() async throws {
+    let asset = makeAsset(name: "develop-families.jpg")
+    let initial = makeRecipe(assetID: asset.id)
+    let catalog = CatalogSpy(assets: [asset], recipes: [asset.id: initial])
+    let workspace = makeWorkspace(catalog: catalog)
+    let tone = try XCTUnwrap(
+      ToneCurveAdjustmentV1(
+        blackPoint: 0.05,
+        shadows: 0.3,
+        midtones: 0.6,
+        highlights: 0.8,
+        whitePoint: 0.98
+      )
+    )
+    let whiteBalance = try XCTUnwrap(WhiteBalanceAdjustmentV1(temperature: 0.25, tint: -0.1))
+    let transform = try XCTUnwrap(
+      TransformAdjustmentV1(
+        straightenDegrees: 8,
+        flipHorizontal: true,
+        flipVertical: false
+      )
+    )
+    let detail = try XCTUnwrap(
+      DetailAdjustmentV1(sharpening: 0.4, luminanceNoiseReduction: 0.2)
+    )
+    let optics = try XCTUnwrap(OpticsAdjustmentV1(vignetteCorrection: 0.2))
+    let effects = try XCTUnwrap(EffectsAdjustmentV1(vignetteAmount: 0.3))
+    let calibration = try XCTUnwrap(
+      CalibrationAdjustmentV1(redGain: 0.1, greenGain: -0.05, blueGain: 0.2)
+    )
+    let blackAndWhite = try XCTUnwrap(
+      BlackAndWhiteAdjustmentV1(redWeight: 0.3, greenWeight: 0.6, blueWeight: 0.1)
+    )
+    let hdr = HDRAdjustmentV1(isEnabled: true, preservesExtendedRange: true)
+    let expected: [EditOperation] = [
+      .toneCurve(tone),
+      .whiteBalance(whiteBalance),
+      .transform(transform),
+      .detail(detail),
+      .optics(optics),
+      .effects(effects),
+      .calibration(calibration),
+      .blackAndWhite(blackAndWhite),
+      .hdr(hdr),
+    ]
+    await workspace.reopen()
+
+    for operation in expected.reversed() {
+      await workspace.commitDevelopOperation(operation)
+    }
+
+    XCTAssertEqual(workspace.currentRecipe?.revision, 9)
+    XCTAssertEqual(workspace.currentRecipe?.operations, expected)
+    let savedRevisions = await catalog.savedRecipes().map(\.revision)
+    XCTAssertEqual(savedRevisions, Array(1...9))
+
+    let reopened = makeWorkspace(catalog: catalog)
+    await reopened.reopen()
+    XCTAssertEqual(reopened.currentRecipe?.revision, 9)
+    XCTAssertEqual(reopened.currentRecipe?.operations, expected)
+  }
+
   func testMaskAuthoringPersistsVersionedGraphAndSupportsInvertAndRemove() async throws {
     let asset = makeAsset(name: "mask.jpg")
     let initial = makeRecipe(assetID: asset.id)
