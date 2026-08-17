@@ -83,7 +83,7 @@ implementation and documented verification.
 | Topic | Status | Current statement |
 | --- | --- | --- |
 | Application releases | Unimplemented | No signed, notarized, reproducible, or published release exists |
-| Installation | Unimplemented | No application artifact exists |
+| Installation | Unimplemented | No signed, notarized, or published application artifact exists |
 | Image import | Unimplemented | No usable import workflow exists |
 | RAW files and cameras | Implemented in pre-alpha core, workflow not yet integrated | Apple-supported RAW decoding uses `CIRAWFilter` authority; no supported-camera list or licensed real RAW fixture test exists |
 | Catalog migration and recovery | Implemented in pre-alpha core, workflow not yet integrated | SQLite migrations, integrity checks, bookmarks, backups, jobs, and reopen tests exist; no user recovery workflow exists |
