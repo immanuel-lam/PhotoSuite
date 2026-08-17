@@ -75,6 +75,16 @@ struct ContentView: View {
             await workspace.importURLs(urls)
           }
         },
+        onImportWithMode: { mediaItems, mode in
+          let urls = mediaItems.compactMap(\.fileURL)
+          guard !urls.isEmpty else {
+            workspace.errorMessage = "The selected import items have no readable file URL."
+            return
+          }
+          Task { @MainActor in
+            await workspace.importURLs(urls, mode: mode)
+          }
+        },
         onCancel: {}
       )
     }

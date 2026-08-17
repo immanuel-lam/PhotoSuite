@@ -12,9 +12,36 @@ public enum LibraryImportReviewAccessibility {
   public static let importButton = "library-import-review-import"
   public static let cancelButton = "library-import-review-cancel"
   public static let summary = "library-import-review-summary"
+  public static let modePicker = "library-import-review-mode"
+  public static let destinationButton = "library-import-review-destination"
 
   public static func item(_ id: String) -> String {
     "library-import-review-item-\(id)"
+  }
+}
+
+/// The file-handling choice shown in the import review sheet.
+public enum LibraryImportModeChoice: String, CaseIterable, Identifiable, Sendable {
+  case add
+  case copy
+  case move
+
+  public var id: Self { self }
+
+  public var title: String {
+    switch self {
+    case .add: "Add in place"
+    case .copy: "Copy to folder"
+    case .move: "Move to folder"
+    }
+  }
+
+  fileprivate func photoImportMode(destinationURL: URL?) -> PhotoImportMode? {
+    switch self {
+    case .add: .add
+    case .copy: destinationURL.map(PhotoImportMode.copy(to:))
+    case .move: destinationURL.map(PhotoImportMode.move(to:))
+    }
   }
 }
 
@@ -25,22 +52,29 @@ public enum LibraryImportReviewAccessibility {
 @MainActor
 public struct LibraryImportReviewView: View {
   public typealias ImportHandler = @MainActor ([CaptureMediaItem]) -> Void
+  public typealias ImportModeHandler = @MainActor ([CaptureMediaItem], PhotoImportMode) -> Void
   public typealias CancelHandler = @MainActor () -> Void
 
   @Environment(\.dismiss) private var dismiss
   @State private var review: LibraryImportReview
   @State private var isSubmitting = false
+  @State private var mode: LibraryImportModeChoice = .add
+  @State private var destinationURL: URL?
+  @State private var isChoosingDestination = false
 
   private let onImport: ImportHandler
+  private let onImportWithMode: ImportModeHandler?
   private let onCancel: CancelHandler
 
   public init(
     review: LibraryImportReview,
     onImport: @escaping ImportHandler,
+    onImportWithMode: ImportModeHandler? = nil,
     onCancel: @escaping CancelHandler = {}
   ) {
     _review = State(initialValue: review)
     self.onImport = onImport
+    self.onImportWithMode = onImportWithMode
     self.onCancel = onCancel
   }
 
@@ -54,6 +88,14 @@ public struct LibraryImportReviewView: View {
     }
     .frame(minWidth: 640, idealWidth: 760, minHeight: 440, idealHeight: 560)
     .background(Color(nsColor: .windowBackgroundColor))
+    .fileImporter(
+      isPresented: $isChoosingDestination,
+      allowedContentTypes: [.folder],
+      allowsMultipleSelection: false
+    ) { result in
+      guard case .success(let urls) = result else { return }
+      destinationURL = urls.first?.standardizedFileURL
+    }
     .accessibilityIdentifier(LibraryImportReviewAccessibility.view)
   }
 
@@ -116,24 +158,61 @@ public struct LibraryImportReviewView: View {
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .padding(34)
     } else {
-      List {
-        Section {
-          ForEach(review.items) { item in
-            LibraryImportReviewRow(item: item) {
-              review.toggleSelection(for: item.id)
+      VStack(spacing: 0) {
+        if onImportWithMode != nil {
+          transferOptions
+        }
+        List {
+          Section {
+            ForEach(review.items) { item in
+              LibraryImportReviewRow(item: item) {
+                review.toggleSelection(for: item.id)
+              }
             }
+          } header: {
+            Text("Photographs")
+              .font(.caption.weight(.semibold))
+              .textCase(nil)
           }
-        } header: {
-          Text("Photographs")
-            .font(.caption.weight(.semibold))
-            .textCase(nil)
+        }
+        .listStyle(.inset)
+        .scrollContentBackground(.hidden)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 8)
+      }
+    }
+  }
+
+  private var transferOptions: some View {
+    HStack(spacing: 12) {
+      Label("Source handling", systemImage: "externaldrive")
+        .font(.callout.weight(.medium))
+      Picker("Source handling", selection: $mode) {
+        ForEach(LibraryImportModeChoice.allCases) { choice in
+          Text(choice.title).tag(choice)
         }
       }
-      .listStyle(.inset)
-      .scrollContentBackground(.hidden)
-      .padding(.horizontal, 8)
-      .padding(.vertical, 8)
+      .pickerStyle(.menu)
+      .accessibilityIdentifier(LibraryImportReviewAccessibility.modePicker)
+
+      if mode != .add {
+        Button {
+          isChoosingDestination = true
+        } label: {
+          Label(
+            destinationURL?.lastPathComponent ?? "Choose destination…",
+            systemImage: "folder"
+          )
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .accessibilityIdentifier(LibraryImportReviewAccessibility.destinationButton)
+      }
+      Spacer(minLength: 0)
     }
+    .padding(.horizontal, 18)
+    .padding(.vertical, 10)
+    .background(Color(nsColor: .controlBackgroundColor).opacity(0.72))
   }
 
   private var footer: some View {
@@ -160,14 +239,24 @@ public struct LibraryImportReviewView: View {
 
       Button {
         isSubmitting = true
-        onImport(review.selectedMediaItems)
+        if let onImportWithMode,
+          let photoImportMode = mode.photoImportMode(destinationURL: destinationURL)
+        {
+          onImportWithMode(review.selectedMediaItems, photoImportMode)
+        } else {
+          onImport(review.selectedMediaItems)
+        }
         dismiss()
       } label: {
         Label("Import \(review.selectionCount)", systemImage: "square.and.arrow.down")
       }
       .modifier(GlassButtonWhenAvailable(prominent: true))
       .keyboardShortcut(.defaultAction)
-      .disabled(review.selectionCount == 0 || isSubmitting)
+      .disabled(
+        review.selectionCount == 0
+          || isSubmitting
+          || (onImportWithMode != nil && mode != .add && destinationURL == nil)
+      )
       .accessibilityIdentifier(LibraryImportReviewAccessibility.importButton)
     }
     .padding(.horizontal, 18)

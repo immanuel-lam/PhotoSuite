@@ -35,5 +35,17 @@ struct LibraryImportReviewViewTests {
     #expect(LibraryImportReviewAccessibility.importButton == "library-import-review-import")
     #expect(
       LibraryImportReviewAccessibility.item(media.id) == "library-import-review-item-camera:1")
+    #expect(LibraryImportModeChoice.allCases == [.add, .copy, .move])
+    #expect(LibraryImportReviewAccessibility.modePicker == "library-import-review-mode")
+    #expect(
+      LibraryImportReviewAccessibility.destinationButton
+        == "library-import-review-destination"
+    )
+
+    _ = LibraryImportReviewView(
+      review: review,
+      onImport: { _ in },
+      onImportWithMode: { _, _ in }
+    )
   }
 }
