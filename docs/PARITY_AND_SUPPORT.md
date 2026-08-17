@@ -32,11 +32,11 @@ implementation and documented verification.
 
 | Area | Lightroom comparison capability | PhotoSuite status | Evidence required before a claim |
 | --- | --- | --- | --- |
-| Import | Photo import and source management | Unimplemented | A usable import workflow is not integrated |
-| Library | Catalog, folders, collections, search, metadata | Implemented in pre-alpha core, workflow not yet integrated | SQLite migrations, asset search, jobs, bookmarks, backup, and reopen tests; no collections or user interface |
-| Develop | Non-destructive adjustment workflow | Implemented in pre-alpha core, workflow not yet integrated | Durable edit recipes and render graph tests; no editing interface |
-| RAW | Camera RAW decoding and processing | Implemented in pre-alpha core, workflow not yet integrated | `CIRAWFilter` authority for the source and decoder tests; no supported-camera list or licensed real RAW fixture test |
-| Local edits | Masks, healing, red-eye, geometry | Partially implemented in pre-alpha core, workflow not yet integrated | Exposure, tone, crop, and rotation image tests; masks, healing, red-eye, and other local edits are unimplemented |
+| Import | Photo import and source management | Partially implemented in pre-alpha core and workflow | Native multi-file import, source fingerprints, bookmarks, preview creation, and missing-file reporting; camera-card and Copy as DNG workflows are not complete |
+| Library | Catalog, folders, collections, search, metadata | Partially implemented in pre-alpha core and workflow | SQLite migrations, asset search, jobs, bookmarks, backup, reopen, thumbnail grid, ratings and selection; folders, collections, smart collections, and full metadata tools are not complete |
+| Develop | Non-destructive adjustment workflow | Partially implemented in pre-alpha core and workflow | Durable recipes, exposure/tone, crop/rotation, histogram, three-way colour grading, preview recovery, and native inspector; curves, masks, local AI, and many baseline controls remain incomplete |
+| RAW | Camera RAW decoding and processing | Partially implemented in pre-alpha core and workflow | `CIRAWFilter` authority and common-image fallback are tested; no supported-camera list or licensed real RAW fixture test |
+| Local edits | Masks, healing, red-eye, geometry | Partially implemented in pre-alpha core, workflow not yet integrated | Exposure, tone, crop, rotation, and typed mask contracts exist; mask authoring, healing, red-eye, and local AI are not complete |
 | AI features | Denoise, selections, generative functions | Unimplemented | Model, privacy, offline, and output evaluation |
 | Metadata | IPTC, EXIF, XMP, keywords, face data | Unimplemented | Read/write and round-trip tests |
 | Catalog interchange | Lightroom catalog import or export | Not supported | Explicit scope decision and legal review |
@@ -45,7 +45,7 @@ implementation and documented verification.
 | Tethering | Camera tethered capture | Unimplemented | Camera and recovery verification |
 | Cloud | Adobe cloud sync and sharing | Not supported | No Adobe service integration is planned |
 | Mobile and web | Lightroom mobile or web workflow | Not supported | Native macOS scope only |
-| Export | JPEG and other export workflows | Partially implemented in pre-alpha core, workflow not yet integrated | Atomic sRGB JPEG export tests; no user export workflow or other deliverables |
+| Export | JPEG and other export workflows | Partially implemented in pre-alpha core and workflow | Atomic sRGB JPEG export, native save panel, quality control, and source-integrity tests; batch presets, resize, metadata, watermark, HDR, print, books, slideshows, and web galleries are not complete |
 | Print and proof | Print templates, soft proofing, book, web | Unimplemented | Colour-managed output verification |
 | Performance | Lightroom-class import, preview, and export speed | Not assessed | Defined workloads and benchmark results |
 
@@ -55,7 +55,7 @@ implementation and documented verification.
 | --- | --- | --- |
 | macOS 15 on Apple silicon | Implemented in pre-alpha core, workflow not yet integrated | Native scaffold and core build and test evidence; manual workflow verification is still required |
 | macOS 16 through macOS 25 on Apple silicon | Unimplemented | Per-release compatibility verification |
-| macOS 26 or later Liquid Glass controls | Unimplemented | Native control integration and accessibility verification |
+| macOS 26 or later Liquid Glass controls | Implemented in pre-alpha core and workflow | Availability-gated native glass controls, neutral precision surfaces, accessibility contracts, and Xcode 27 beta UI tests; final release accessibility and hardware verification remain open |
 | Apple M1 family | Unimplemented | Build and workflow verification on an M1 Mac |
 | Apple M2 family | Unimplemented | Build and workflow verification on an M2 Mac |
 | Apple M3 family | Unimplemented | Build and workflow verification on an M3 Mac |
@@ -84,11 +84,11 @@ implementation and documented verification.
 | --- | --- | --- |
 | Application releases | Unimplemented | No signed, notarized, reproducible, or published release exists |
 | Installation | Unimplemented | No signed, notarized, or published application artifact exists |
-| Image import | Unimplemented | No usable import workflow exists |
-| RAW files and cameras | Implemented in pre-alpha core, workflow not yet integrated | Apple-supported RAW decoding uses `CIRAWFilter` authority; no supported-camera list or licensed real RAW fixture test exists |
-| Catalog migration and recovery | Implemented in pre-alpha core, workflow not yet integrated | SQLite migrations, integrity checks, bookmarks, backups, jobs, and reopen tests exist; no user recovery workflow exists |
-| Editing, preview, and export | Implemented in pre-alpha core, workflow not yet integrated | Core Image and Metal render graph, bounded preview, and atomic sRGB JPEG export tests exist; no usable editing or export interface exists |
-| Accessibility | Unimplemented | No user interface exists to evaluate |
+| Image import | Partially implemented in pre-alpha core and workflow | Native multi-file import and missing-file state exist; card, camera, Copy as DNG, metadata presets, and complete recovery UI are not complete |
+| RAW files and cameras | Partially implemented in pre-alpha core and workflow | Apple-supported RAW decoding uses `CIRAWFilter` authority and empty-pin recovery; no supported-camera list or licensed real RAW fixture test exists |
+| Catalog migration and recovery | Partially implemented in pre-alpha core and workflow | SQLite migrations, integrity checks, bookmarks, backups, jobs, reopen, relink, and typed preview recovery exist; the full user recovery workflow is not complete |
+| Editing, preview, and export | Partially implemented in pre-alpha core and workflow | Core Image and Metal render graph, bounded preview, histogram, three-way colour grade, native inspector, and atomic sRGB JPEG export exist; many Develop and Deliver modules remain incomplete |
+| Accessibility | Partially implemented in pre-alpha core and workflow | Stable identifiers, keyboard commands, native controls, Reduce Transparency paths, and UI contract tests exist; VoiceOver and hardware acceptance remain open |
 | Security response | Unimplemented | No supported release; see SECURITY.md |
 | Commercial support | Not supported | No commercial support service is offered |
 | Adobe product support | Not supported | PhotoSuite is independent from Adobe |

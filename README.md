@@ -1,14 +1,14 @@
 # PhotoSuite
 
-PhotoSuite is a planned native macOS photograph workflow application.
-It will use Swift, SwiftUI, AppKit, Core Image, Metal, ColorSync, and
-SQLite. It is not an Electron or Mac Catalyst application.
+PhotoSuite is a native macOS photograph workflow application in active
+pre-alpha development. It uses Swift, SwiftUI, AppKit, Core Image, Metal,
+ColorSync, and SQLite. It is not an Electron or Mac Catalyst application.
 
 ## Current status
 
 This pre-alpha revision contains the project governance documents, a
-Swift package, and a native macOS application scaffold that builds. It
-also contains these tested, non-user-facing core components:
+Swift package, and a native macOS application that builds. It also contains
+these tested components:
 
 - PhotoDomain contracts;
 - a SQLite catalog with migrations, search, jobs, security-scoped
@@ -16,18 +16,19 @@ also contains these tested, non-user-facing core components:
 - a Core Image and Metal render core;
 - common image decoding and Apple-supported RAW decoding when
   `CIRAWFilter` accepts the source;
-- an ordered edit graph for exposure, tone, crop, and rotation, with
-  bounded previews; and
-- atomic sRGB JPEG export.
+- an ordered edit graph for exposure, tone, crop, rotation, and three-way
+  colour grading, with bounded previews and render histograms;
+- an import, Library, Develop, and Deliver workflow with native controls,
+  macOS 26 Liquid Glass availability branches, and macOS 15 material
+  fallbacks; and
+- atomic sRGB JPEG export from the same edit graph.
 
-These components are not integrated into a usable import or editing
-interface. That integration is planned for Task 6. A licensed real RAW
-fixture is not present in this repository, so a real RAW fixture test is
-skipped. The project has no Lightroom parity claim, and it does not yet
-implement masks, AI functions, tethering, print or proof workflows,
-delivery extras beyond JPEG export, or other Lightroom workflow features.
-There is no signed, notarized, reproducible, or published release. Do not
-use this pre-alpha revision for photographs.
+This is not a Lightroom parity claim. Many planned capabilities remain
+incomplete, including masks, local AI, full metadata, tethering, Map,
+publishing, print, books, slideshows, web galleries, and camera/vendor
+integrations. A licensed real RAW fixture is not present in this repository,
+so the real RAW fixture test is skipped. There is no signed, notarized,
+reproducible, or published release. Use test copies of photographs only.
 
 The comparison baseline is Adobe Lightroom Classic 15.4.1. PhotoSuite
 does not claim feature, file-format, performance, workflow, plug-in, or
@@ -47,10 +48,11 @@ service compatibility with Lightroom. See
 
 ## First implementation slice
 
-The implemented core slice is intentionally small: common image and
-Apple-supported RAW decoding, a local catalog, exposure and crop previews,
-catalog reopen, and tagged JPEG export. It is implementation evidence only,
-not a user workflow, support promise, or Lightroom comparison claim.
+The implemented first-photograph slice imports a common image or
+Apple-supported RAW source, persists a local catalog, renders exposure and
+crop previews, shows a histogram and three-way colour controls, reopens the
+catalog, and exports a tagged JPEG. It is implementation evidence only, not
+a support promise or Lightroom comparison claim.
 
 ## Build and release status
 
