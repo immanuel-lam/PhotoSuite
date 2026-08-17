@@ -121,9 +121,9 @@ Use `make check` to run the Swift package tests, generate the Xcode
 project with XcodeGen, and build the unsigned arm64 macOS application.
 The current scaffold requires Swift 6, Xcode 26.3 or later, and XcodeGen
 2.45.3 or later on `PATH`. Public CI run
-[`32054743443`](https://github.com/immanuel-lam/PhotoSuite/actions/runs/32054743443)
+[`32060740341`](https://github.com/immanuel-lam/PhotoSuite/actions/runs/32060740341)
 passed the package tests, unsigned arm64 build, and checked-in SBOM step for
-commit `7eec2f638cb4eb8aa2171eb798bd92e462988fd9`. This does not prove a
+commit `8291b29972f85c640d5f26e89b0dc2f74a823b0b`. This does not prove a
 release artifact, reproducibility,
 signing, or notarization. Before any release, follow the reproducible-build
 and SBOM process in
