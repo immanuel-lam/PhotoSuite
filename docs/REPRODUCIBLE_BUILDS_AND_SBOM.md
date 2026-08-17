@@ -2,10 +2,11 @@
 
 ## Status
 
-The public pre-alpha CI builds an unsigned debug application and tests the
-native catalog and render cores. It does not compare independent release
-builds, generate an SBOM, sign, or notarize. Therefore, PhotoSuite does not
-claim that builds are reproducible and does not publish an SBOM artifact.
+The public pre-alpha CI is configured to build an unsigned debug application
+and test the native catalog and render cores. No public CI run exists yet. The
+workflow does not compare independent release builds, generate an SBOM, sign,
+or notarize. Therefore, PhotoSuite does not claim that builds are reproducible
+and does not publish an SBOM artifact.
 No independent clean-build comparison has been recorded. This document
 defines the additional process required before the first release candidate.
 

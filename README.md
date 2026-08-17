@@ -56,9 +56,9 @@ not a user workflow, support promise, or Lightroom comparison claim.
 
 Use `make check` to run the Swift package tests, generate the Xcode
 project with XcodeGen, and build the unsigned arm64 macOS application.
-The current scaffold requires Swift 6, Xcode 26.5, and XcodeGen on
-`PATH`. Before any release, follow the reproducible-build and SBOM
-process in
+The current scaffold requires Swift 6, Xcode 26.3 or later, and XcodeGen
+2.45.3 or later on `PATH`. Before any release, follow the reproducible-build
+and SBOM process in
 [docs/REPRODUCIBLE_BUILDS_AND_SBOM.md](docs/REPRODUCIBLE_BUILDS_AND_SBOM.md).
 
 ## Contributing and security

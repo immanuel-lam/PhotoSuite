@@ -6,7 +6,7 @@ name: PhotoSuite
 
 options:
   minimumXcodeGenVersion: 2.45.3
-  xcodeVersion: "26.0"
+  xcodeVersion: "26.3"
   deploymentTarget:
     macOS: "15.0"
   createIntermediateGroups: true
