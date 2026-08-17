@@ -9,8 +9,68 @@ public enum WorkspaceSection: String, CaseIterable, Identifiable, Sendable {
   case library
   case develop
   case deliver
+  case workspace
 
   public var id: Self { self }
+}
+
+public enum ProfessionalTool: String, CaseIterable, Codable, Hashable, Identifiable, Sendable {
+  case map
+  case tether
+  case print
+  case book
+  case slideshow
+  case webGallery
+  case plugins
+  case adobeMigration
+
+  public var id: Self { self }
+}
+
+public enum ProfessionalCapabilityBlocker: String, Codable, Hashable, Sendable {
+  case locationMetadataUnavailable
+  case selectionRequired
+  case cameraAdapterRequired
+  case bookExportUnavailable
+  case webPublishingUnavailable
+  case pluginHostUnavailable
+  case adobeCatalogParserUnavailable
+}
+
+public enum ProfessionalCapabilityStatus: Codable, Hashable, Sendable {
+  case available
+  case previewOnly(ProfessionalCapabilityBlocker)
+  case unavailable(ProfessionalCapabilityBlocker)
+}
+
+public struct PhotoCoordinate: Codable, Hashable, Sendable {
+  public let latitude: Double
+  public let longitude: Double
+
+  public init?(latitude: Double, longitude: Double) {
+    guard latitude.isFinite, longitude.isFinite,
+      (-90...90).contains(latitude),
+      (-180...180).contains(longitude)
+    else {
+      return nil
+    }
+    self.latitude = latitude
+    self.longitude = longitude
+  }
+}
+
+public struct PhotoLocation: Codable, Hashable, Identifiable, Sendable {
+  public let assetID: UUID
+  public let filename: String
+  public let coordinate: PhotoCoordinate
+
+  public var id: UUID { assetID }
+
+  public init(assetID: UUID, filename: String, coordinate: PhotoCoordinate) {
+    self.assetID = assetID
+    self.filename = filename
+    self.coordinate = coordinate
+  }
 }
 
 public enum AdjustmentKind: String, CaseIterable, Identifiable, Sendable {

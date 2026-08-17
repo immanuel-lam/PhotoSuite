@@ -4,6 +4,7 @@
 
 import CatalogCore
 import Foundation
+import ImageIO
 import PhotoDomain
 import RenderCore
 import UniformTypeIdentifiers
@@ -42,7 +43,8 @@ public enum PhotoWorkspaceComposition {
           ),
           typeIdentifier: UTType(filenameExtension: url.pathExtension)?.identifier
         )
-      }
+      },
+      locationProbe: { url in photoCoordinate(from: url) }
     )
   }
 
@@ -75,4 +77,23 @@ public enum PhotoWorkspaceComposition {
     }
     return url
   }
+}
+
+private func photoCoordinate(from url: URL) -> PhotoCoordinate? {
+  guard
+    let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+    let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)
+      as? [CFString: Any],
+    let gps = properties[kCGImagePropertyGPSDictionary] as? [CFString: Any],
+    let latitude = (gps[kCGImagePropertyGPSLatitude] as? NSNumber)?.doubleValue,
+    let longitude = (gps[kCGImagePropertyGPSLongitude] as? NSNumber)?.doubleValue
+  else {
+    return nil
+  }
+
+  let latitudeReference = (gps[kCGImagePropertyGPSLatitudeRef] as? String)?.uppercased()
+  let longitudeReference = (gps[kCGImagePropertyGPSLongitudeRef] as? String)?.uppercased()
+  let signedLatitude = latitudeReference == "S" ? -abs(latitude) : abs(latitude)
+  let signedLongitude = longitudeReference == "W" ? -abs(longitude) : abs(longitude)
+  return PhotoCoordinate(latitude: signedLatitude, longitude: signedLongitude)
 }

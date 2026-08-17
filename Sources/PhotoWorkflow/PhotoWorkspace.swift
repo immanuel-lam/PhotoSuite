@@ -35,6 +35,9 @@ public final class PhotoWorkspace {
   public var smartFilter = LibrarySmartFilter()
   public var activeCollectionID: UUID?
   public var deliverOptions = DeliverOptions()
+  public var professionalTool: ProfessionalTool = .map
+  public var photoLocations: [PhotoLocation] = []
+  public var isLoadingPhotoLocations = false
 
   public var selectedAsset: PhotoAsset? {
     guard let selectedAssetID else { return nil }
@@ -93,6 +96,7 @@ public final class PhotoWorkspace {
   private let sourceAccess: SourceAccessOperations
   private let fingerprint: @Sendable (URL) async throws -> SourceFingerprint
   private let probe: @Sendable (URL) async throws -> SourceProbe
+  private let locationProbe: @Sendable (URL) async throws -> PhotoCoordinate?
   private let now: @Sendable () -> Date
   private let previewDebounce: @Sendable () async throws -> Void
   private var previewCache: [UUID: PreviewFrame] = [:]
@@ -114,6 +118,7 @@ public final class PhotoWorkspace {
     sourceAccess: SourceAccessOperations,
     fingerprint: @escaping @Sendable (URL) async throws -> SourceFingerprint,
     probe: @escaping @Sendable (URL) async throws -> SourceProbe,
+    locationProbe: @escaping @Sendable (URL) async throws -> PhotoCoordinate? = { _ in nil },
     now: @escaping @Sendable () -> Date = { Date() },
     previewDebounce: @escaping @Sendable () async throws -> Void = {
       try await Task.sleep(for: .milliseconds(160))
@@ -125,6 +130,7 @@ public final class PhotoWorkspace {
     self.sourceAccess = sourceAccess
     self.fingerprint = fingerprint
     self.probe = probe
+    self.locationProbe = locationProbe
     self.now = now
     self.previewDebounce = previewDebounce
   }
@@ -194,6 +200,57 @@ public final class PhotoWorkspace {
       }
     } catch {
       record(error, operation: "reopen")
+    }
+  }
+
+  public func loadPhotoLocations() async {
+    isLoadingPhotoLocations = true
+    defer { isLoadingPhotoLocations = false }
+    var loaded: [PhotoLocation] = []
+    for asset in assets where !asset.isMissing {
+      do {
+        try Task.checkCancellation()
+        let url = try await sourceAccess.resolve(asset)
+        let started = await sourceAccess.start(url)
+        do {
+          let coordinate = try await locationProbe(url)
+          if started { await sourceAccess.stop(url) }
+          if let coordinate {
+            loaded.append(
+              PhotoLocation(assetID: asset.id, filename: asset.filename, coordinate: coordinate)
+            )
+          }
+        } catch {
+          if started { await sourceAccess.stop(url) }
+          throw error
+        }
+      } catch is CancellationError {
+        return
+      } catch {
+        // A source without readable GPS metadata does not make the catalog invalid.
+      }
+    }
+    photoLocations = loaded
+  }
+
+  public func professionalStatus(for tool: ProfessionalTool) -> ProfessionalCapabilityStatus {
+    switch tool {
+    case .map:
+      photoLocations.isEmpty ? .unavailable(.locationMetadataUnavailable) : .available
+    case .tether:
+      .previewOnly(.cameraAdapterRequired)
+    case .print:
+      preview == nil ? .unavailable(.selectionRequired) : .available
+    case .book:
+      preview == nil ? .unavailable(.selectionRequired) : .previewOnly(.bookExportUnavailable)
+    case .slideshow:
+      preview == nil ? .unavailable(.selectionRequired) : .available
+    case .webGallery:
+      preview == nil ? .unavailable(.selectionRequired) : .previewOnly(.webPublishingUnavailable)
+    case .plugins:
+      .unavailable(.pluginHostUnavailable)
+    case .adobeMigration:
+      .unavailable(.adobeCatalogParserUnavailable)
     }
   }
 

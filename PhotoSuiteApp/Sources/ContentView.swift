@@ -79,6 +79,8 @@ struct ContentView: View {
       DeliverView(workspace: workspace, quality: $jpegQuality) {
         workspace.isChoosingExportDestination = true
       }
+    case .workspace:
+      ProfessionalWorkspaceView(workspace: workspace)
     }
   }
 

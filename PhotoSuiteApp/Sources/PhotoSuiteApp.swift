@@ -83,6 +83,8 @@ private struct PhotoSuiteCommands: Commands {
         .keyboardShortcut("2", modifiers: .command)
       Button("Deliver") { workspace?.section = .deliver }
         .keyboardShortcut("3", modifiers: .command)
+      Button("Workspace") { workspace?.section = .workspace }
+        .keyboardShortcut("4", modifiers: .command)
       Divider()
       Button("Toggle Before and After") { workspace?.toggleBeforeAfter() }
         .keyboardShortcut("\\")

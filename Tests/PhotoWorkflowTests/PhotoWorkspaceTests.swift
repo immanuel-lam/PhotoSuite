@@ -716,6 +716,67 @@ final class PhotoWorkspaceTests: XCTestCase {
     )
     XCTAssertNil(workspace.lastError)
   }
+
+  func testProfessionalMapLoadsValidLocationsInsideSourceAccess() async throws {
+    let asset = makeAsset(name: "geotagged.jpg")
+    let catalog = CatalogSpy(assets: [asset], recipes: [asset.id: makeRecipe(assetID: asset.id)])
+    let access = SourceAccessSpy()
+    let recorder = LocationProbeRecorder(access: access)
+    let workspace = makeWorkspace(
+      catalog: catalog,
+      access: access,
+      locationProbe: { url in try await recorder.probe(url) }
+    )
+    await workspace.reopen()
+
+    await workspace.loadPhotoLocations()
+
+    XCTAssertEqual(
+      workspace.photoLocations,
+      [
+        PhotoLocation(
+          assetID: asset.id,
+          filename: asset.filename,
+          coordinate: PhotoCoordinate(latitude: -33.8688, longitude: 151.2093)!
+        )
+      ]
+    )
+    XCTAssertEqual(workspace.professionalStatus(for: .map), .available)
+    let accessWasActive = await recorder.wasAccessActive()
+    let activeAccessCount = await access.activeAccessCount()
+    XCTAssertTrue(accessWasActive)
+    XCTAssertEqual(activeAccessCount, 0)
+  }
+
+  func testProfessionalToolsReportPreviewOnlyAndTypedUnavailableStates() async throws {
+    let asset = makeAsset(name: "professional.jpg")
+    let workspace = makeWorkspace(
+      catalog: CatalogSpy(assets: [asset], recipes: [asset.id: makeRecipe(assetID: asset.id)])
+    )
+    await workspace.reopen()
+
+    XCTAssertEqual(workspace.professionalStatus(for: .print), .available)
+    XCTAssertEqual(
+      workspace.professionalStatus(for: .tether),
+      .previewOnly(.cameraAdapterRequired)
+    )
+    XCTAssertEqual(
+      workspace.professionalStatus(for: .book),
+      .previewOnly(.bookExportUnavailable)
+    )
+    XCTAssertEqual(
+      workspace.professionalStatus(for: .webGallery),
+      .previewOnly(.webPublishingUnavailable)
+    )
+    XCTAssertEqual(
+      workspace.professionalStatus(for: .plugins),
+      .unavailable(.pluginHostUnavailable)
+    )
+    XCTAssertEqual(
+      workspace.professionalStatus(for: .adobeMigration),
+      .unavailable(.adobeCatalogParserUnavailable)
+    )
+  }
 }
 
 extension PhotoWorkspaceTests {
@@ -727,7 +788,8 @@ extension PhotoWorkspaceTests {
     fingerprint: @escaping @Sendable (URL) async throws -> SourceFingerprint = { _ in
       SourceFingerprint(
         sha256: String(repeating: "a", count: 64), byteCount: 10, modificationDate: nil)!
-    }
+    },
+    locationProbe: @escaping @Sendable (URL) async throws -> PhotoCoordinate? = { _ in nil }
   ) -> PhotoWorkspace {
     PhotoWorkspace(
       catalog: catalog,
@@ -749,6 +811,7 @@ extension PhotoWorkspaceTests {
           typeIdentifier: url.pathExtension == "raw" ? "public.camera-raw-image" : "public.image"
         )
       },
+      locationProbe: locationProbe,
       now: { Date(timeIntervalSince1970: 100) },
       previewDebounce: {}
     )
@@ -1079,6 +1142,20 @@ private actor AccessPhaseRecorder {
 
   func record(_ phase: String, active: Bool) { recorded[phase] = active }
   func values() -> [String: Bool] { recorded }
+}
+
+private actor LocationProbeRecorder {
+  private let access: SourceAccessSpy
+  private var accessWasActive = false
+
+  init(access: SourceAccessSpy) { self.access = access }
+
+  func probe(_ url: URL) async throws -> PhotoCoordinate? {
+    accessWasActive = await access.isActive
+    return PhotoCoordinate(latitude: -33.8688, longitude: 151.2093)
+  }
+
+  func wasAccessActive() -> Bool { accessWasActive }
 }
 
 private enum TestError: Error {

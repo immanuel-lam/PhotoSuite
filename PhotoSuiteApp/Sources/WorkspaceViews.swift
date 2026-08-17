@@ -264,6 +264,7 @@ extension WorkspaceSection {
     case .library: "Library"
     case .develop: "Develop"
     case .deliver: "Deliver"
+    case .workspace: "Workspace"
     }
   }
 
@@ -272,6 +273,7 @@ extension WorkspaceSection {
     case .library: "square.grid.2x2"
     case .develop: "slider.horizontal.3"
     case .deliver: "square.and.arrow.up"
+    case .workspace: "rectangle.3.group"
     }
   }
 
@@ -280,6 +282,7 @@ extension WorkspaceSection {
     case .library: ModernUIAccessibility.library
     case .develop: ModernUIAccessibility.develop
     case .deliver: ModernUIAccessibility.deliver
+    case .workspace: ModernUIAccessibility.professionalWorkspace
     }
   }
 }
