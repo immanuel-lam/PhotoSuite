@@ -47,8 +47,9 @@ The interface can review local import selections with duplicate states, browse a
 catalog, relink a missing source after fingerprint validation, apply basic and
 baseline Develop groups, author local mask graphs, crop and rotate, compare before
 and after, inspect the histogram and three-way colour grade, author versioned masks,
-edit catalog metadata, import and write the supported XMP sidecar fields, and write
-JPEG, PNG, HEIF, or TIFF output through Deliver.
+edit catalog metadata, import and write the supported XMP sidecar fields, use
+validated manual clone, healing, and red-eye controls, and write JPEG, PNG, HEIF,
+or TIFF output through Deliver.
 Durable regular and smart collections plus photo stacks load from the catalog and
 can be created from the Library sidebar. Durable hierarchical keyword nodes and
 asset assignments, folder hierarchy and asset assignments, durable Develop presets,
