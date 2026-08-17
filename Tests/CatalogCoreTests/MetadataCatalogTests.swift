@@ -37,7 +37,7 @@ final class MetadataCatalogTests: XCTestCase {
 
     let database = try openDatabase(catalogURL)
     defer { sqlite3_close_v2(database) }
-    XCTAssertEqual(try scalarInt(database, "PRAGMA user_version;"), 6)
+    XCTAssertEqual(try scalarInt(database, "PRAGMA user_version;"), 7)
     XCTAssertEqual(try scalarInt(database, "SELECT COUNT(*) FROM asset_keywords;"), 2)
   }
 

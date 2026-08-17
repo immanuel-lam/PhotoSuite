@@ -140,7 +140,7 @@ final class DevelopPresetTests: XCTestCase {
       sqlite3_open_v2(catalogURL.path, &database, SQLITE_OPEN_READONLY, nil), SQLITE_OK)
     guard let database else { return XCTFail("The catalog could not be opened.") }
     defer { sqlite3_close_v2(database) }
-    XCTAssertEqual(try scalarInt(database, "PRAGMA user_version;"), 6)
+    XCTAssertEqual(try scalarInt(database, "PRAGMA user_version;"), 7)
     XCTAssertEqual(
       try scalarInt(
         database,

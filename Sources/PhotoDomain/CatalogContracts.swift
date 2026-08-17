@@ -520,6 +520,74 @@ public struct CatalogFolderAssetsResult: Codable, Hashable, Sendable {
   }
 }
 
+/// Persists one geometric face annotation. The optional label is metadata
+/// supplied by a user or an import; it is not an identity-recognition result.
+public struct CatalogFaceSaveRequest: Codable, Hashable, Sendable {
+  public let face: PhotoFace
+
+  public init(face: PhotoFace) {
+    self.face = face
+  }
+}
+
+public struct CatalogFaceSaveResult: Codable, Hashable, Sendable {
+  public let face: PhotoFace
+
+  public init(face: PhotoFace) {
+    self.face = face
+  }
+}
+
+public struct CatalogFaceListRequest: Codable, Hashable, Sendable {
+  public let assetID: UUID?
+
+  public init(assetID: UUID? = nil) {
+    self.assetID = assetID
+  }
+}
+
+public struct CatalogFaceListResult: Codable, Hashable, Sendable {
+  public let faces: [PhotoFace]
+
+  public init(faces: [PhotoFace]) {
+    self.faces = faces
+  }
+}
+
+public struct CatalogFaceSearchRequest: Codable, Hashable, Sendable {
+  public let query: String
+  public let limit: Int?
+
+  public init(query: String, limit: Int? = nil) {
+    self.query = query
+    self.limit = limit
+  }
+}
+
+public struct CatalogFaceSearchResult: Codable, Hashable, Sendable {
+  public let faces: [PhotoFace]
+
+  public init(faces: [PhotoFace]) {
+    self.faces = faces
+  }
+}
+
+public struct CatalogFaceDeleteRequest: Codable, Hashable, Sendable {
+  public let faceID: UUID
+
+  public init(faceID: UUID) {
+    self.faceID = faceID
+  }
+}
+
+public struct CatalogFaceDeleteResult: Codable, Hashable, Sendable {
+  public let faceID: UUID
+
+  public init(faceID: UUID) {
+    self.faceID = faceID
+  }
+}
+
 public enum CatalogAssetOrder: String, Codable, Hashable, Sendable {
   case importDateAscending
   case importDateDescending
@@ -757,6 +825,15 @@ public protocol LibraryCatalogStore: CatalogStore {
     -> CatalogAssetFolderResult
   func listFolderAssets(_ request: CatalogFolderAssetsRequest) async throws
     -> CatalogFolderAssetsResult
+}
+
+/// Catalog persistence for bounded face geometry and optional user labels.
+/// Implementations must not infer, assert, or expose biometric identity.
+public protocol PeopleCatalogStore: CatalogStore {
+  func saveFace(_ request: CatalogFaceSaveRequest) async throws -> CatalogFaceSaveResult
+  func listFaces(_ request: CatalogFaceListRequest) async throws -> CatalogFaceListResult
+  func searchFaces(_ request: CatalogFaceSearchRequest) async throws -> CatalogFaceSearchResult
+  func deleteFace(_ request: CatalogFaceDeleteRequest) async throws -> CatalogFaceDeleteResult
 }
 
 public struct JobEnqueueRequest: Codable, Hashable, Sendable {

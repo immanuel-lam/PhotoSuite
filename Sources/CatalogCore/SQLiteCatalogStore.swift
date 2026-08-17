@@ -67,9 +67,10 @@ private struct SQLiteIndexColumn: Equatable {
   let isKey: Bool
 }
 
-public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCatalogStore, JobEngine
+public actor SQLiteCatalogStore:
+  CatalogStore, MetadataCatalogStore, LibraryCatalogStore, PeopleCatalogStore, JobEngine
 {
-  private static let schemaVersion: Int64 = 6
+  private static let schemaVersion: Int64 = 7
   private let connection: SQLiteConnection
   private let ftsAvailable: Bool
   private let encoder: JSONEncoder
@@ -1311,6 +1312,146 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
     )
   }
 
+  public func saveFace(
+    _ request: CatalogFaceSaveRequest
+  ) async throws -> CatalogFaceSaveResult {
+    let face = request.face
+    guard try assetExists(face.assetID, operation: "face.save") else {
+      throw CatalogStoreError.notFound(
+        operation: "face.save", message: "The face asset does not exist.")
+    }
+    let normalizedLabel = face.label.map(normalizeFaceLabel)
+    try withStatement(
+      """
+      INSERT INTO face_annotations (
+        id, asset_id, x, y, width, height, label, normalized_label, confidence,
+        annotation_source, created_ms, updated_ms
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        asset_id=excluded.asset_id,
+        x=excluded.x,
+        y=excluded.y,
+        width=excluded.width,
+        height=excluded.height,
+        label=excluded.label,
+        normalized_label=excluded.normalized_label,
+        confidence=excluded.confidence,
+        annotation_source=excluded.annotation_source,
+        created_ms=excluded.created_ms,
+        updated_ms=excluded.updated_ms;
+      """,
+      operation: "face.save"
+    ) { statement in
+      try bind(assetID: face.id, to: statement, index: 1, operation: "face.save")
+      try bind(assetID: face.assetID, to: statement, index: 2, operation: "face.save")
+      try bind(face.region.x, to: statement, index: 3, operation: "face.save")
+      try bind(face.region.y, to: statement, index: 4, operation: "face.save")
+      try bind(face.region.width, to: statement, index: 5, operation: "face.save")
+      try bind(face.region.height, to: statement, index: 6, operation: "face.save")
+      try bind(face.label, to: statement, index: 7, operation: "face.save")
+      try bind(normalizedLabel, to: statement, index: 8, operation: "face.save")
+      try bind(face.confidence, to: statement, index: 9, operation: "face.save")
+      try bind(face.source.rawValue, to: statement, index: 10, operation: "face.save")
+      try bind(milliseconds(face.createdAt), to: statement, index: 11, operation: "face.save")
+      try bind(milliseconds(face.updatedAt), to: statement, index: 12, operation: "face.save")
+      try stepDone(statement, operation: "face.save")
+    }
+    return CatalogFaceSaveResult(face: face)
+  }
+
+  public func listFaces(
+    _ request: CatalogFaceListRequest
+  ) async throws -> CatalogFaceListResult {
+    if let assetID = request.assetID {
+      guard try assetExists(assetID, operation: "face.list") else {
+        throw CatalogStoreError.notFound(
+          operation: "face.list", message: "The face asset does not exist.")
+      }
+    }
+    let sql: String
+    if request.assetID == nil {
+      sql = """
+        SELECT id, asset_id, x, y, width, height, label, normalized_label, confidence,
+          annotation_source, created_ms, updated_ms
+        FROM face_annotations
+        ORDER BY created_ms ASC, id ASC;
+        """
+    } else {
+      sql = """
+        SELECT id, asset_id, x, y, width, height, label, normalized_label, confidence,
+          annotation_source, created_ms, updated_ms
+        FROM face_annotations
+        WHERE asset_id = ?
+        ORDER BY created_ms ASC, id ASC;
+        """
+    }
+    let faces: [PhotoFace] = try withStatement(sql, operation: "face.list") { statement in
+      if let assetID = request.assetID {
+        try bind(assetID: assetID, to: statement, index: 1, operation: "face.list")
+      }
+      var results: [PhotoFace] = []
+      while true {
+        let code = sqlite3_step(statement)
+        if code == SQLITE_DONE { break }
+        guard code == SQLITE_ROW else { throw sqliteError(operation: "face.list", code: code) }
+        results.append(try decodeFace(statement, operation: "face.list"))
+      }
+      return results
+    }
+    return CatalogFaceListResult(faces: faces)
+  }
+
+  public func searchFaces(
+    _ request: CatalogFaceSearchRequest
+  ) async throws -> CatalogFaceSearchResult {
+    let query = normalizeFaceLabel(request.query)
+    guard !query.isEmpty else { return CatalogFaceSearchResult(faces: []) }
+    if let limit = request.limit, limit <= 0 {
+      throw CatalogStoreError.invalidRequest(
+        operation: "face.search", message: "The limit must be greater than zero.")
+    }
+    let pattern = "%" + escapeLike(query) + "%"
+    let limit = request.limit.map(Int64.init) ?? Int64.max
+    let faces: [PhotoFace] = try withStatement(
+      """
+      SELECT id, asset_id, x, y, width, height, label, normalized_label, confidence,
+        annotation_source, created_ms, updated_ms
+      FROM face_annotations
+      WHERE normalized_label LIKE ? ESCAPE '\\'
+      ORDER BY updated_ms DESC, id ASC
+      LIMIT ?;
+      """,
+      operation: "face.search"
+    ) { statement in
+      try bind(pattern, to: statement, index: 1, operation: "face.search")
+      try bind(limit, to: statement, index: 2, operation: "face.search")
+      var results: [PhotoFace] = []
+      while true {
+        let code = sqlite3_step(statement)
+        if code == SQLITE_DONE { break }
+        guard code == SQLITE_ROW else { throw sqliteError(operation: "face.search", code: code) }
+        results.append(try decodeFace(statement, operation: "face.search"))
+      }
+      return results
+    }
+    return CatalogFaceSearchResult(faces: faces)
+  }
+
+  public func deleteFace(
+    _ request: CatalogFaceDeleteRequest
+  ) async throws -> CatalogFaceDeleteResult {
+    try withStatement("DELETE FROM face_annotations WHERE id = ?;", operation: "face.delete") {
+      statement in
+      try bind(assetID: request.faceID, to: statement, index: 1, operation: "face.delete")
+      try stepDone(statement, operation: "face.delete")
+    }
+    guard sqlite3_changes(database) == 1 else {
+      throw CatalogStoreError.notFound(
+        operation: "face.delete", message: "The face annotation does not exist.")
+    }
+    return CatalogFaceDeleteResult(faceID: request.faceID)
+  }
+
   public func listAssets(
     _ request: CatalogAssetListRequest
   ) async throws -> CatalogAssetListResult {
@@ -2502,6 +2643,14 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
     try checkBind(code, operation: operation)
   }
 
+  private func bind(_ value: Double?, to statement: OpaquePointer, index: Int32, operation: String)
+    throws
+  {
+    let code =
+      value.map { sqlite3_bind_double(statement, index, $0) } ?? sqlite3_bind_null(statement, index)
+    try checkBind(code, operation: operation)
+  }
+
   private func bind(_ value: Data?, to statement: OpaquePointer, index: Int32, operation: String)
     throws
   {
@@ -2851,6 +3000,67 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
     return folder
   }
 
+  private func decodeFace(_ statement: OpaquePointer, operation: String) throws -> PhotoFace {
+    guard let id = UUID(uuidString: try columnString(statement, column: 0, operation: operation))
+    else {
+      throw CatalogStoreError.decoding(operation: operation, message: "The face ID is invalid.")
+    }
+    guard
+      let assetID = UUID(uuidString: try columnString(statement, column: 1, operation: operation))
+    else {
+      throw CatalogStoreError.decoding(
+        operation: operation, message: "The face asset ID is invalid.")
+    }
+    guard
+      let region = FaceRegion(
+        x: sqlite3_column_double(statement, 2),
+        y: sqlite3_column_double(statement, 3),
+        width: sqlite3_column_double(statement, 4),
+        height: sqlite3_column_double(statement, 5)
+      )
+    else {
+      throw CatalogStoreError.decoding(
+        operation: operation, message: "The stored face region is invalid.")
+    }
+    let label = optionalColumnString(statement, column: 6)
+    let normalizedLabel = optionalColumnString(statement, column: 7)
+    let confidence: Double?
+    if sqlite3_column_type(statement, 8) == SQLITE_NULL {
+      confidence = nil
+    } else {
+      let value = sqlite3_column_double(statement, 8)
+      guard value.isFinite else {
+        throw CatalogStoreError.decoding(
+          operation: operation, message: "The stored face confidence is invalid.")
+      }
+      confidence = value
+    }
+    let source = FaceAnnotationSource(
+      rawValue: try columnString(
+        statement, column: 9, operation: operation))
+    guard !source.rawValue.isEmpty else {
+      throw CatalogStoreError.decoding(
+        operation: operation, message: "The stored face annotation source is invalid.")
+    }
+    guard
+      let face = PhotoFace(
+        id: id,
+        assetID: assetID,
+        region: region,
+        label: label,
+        confidence: confidence,
+        source: source,
+        createdAt: optionalDate(statement, column: 10) ?? .distantPast,
+        updatedAt: optionalDate(statement, column: 11) ?? .distantPast
+      ),
+      face.label.map(normalizeFaceLabel) == normalizedLabel
+    else {
+      throw CatalogStoreError.decoding(
+        operation: operation, message: "The stored face annotation is invalid.")
+    }
+    return face
+  }
+
   private func decodeDevelopPreset(
     _ statement: OpaquePointer,
     operation: String
@@ -3016,7 +3226,7 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
   {
     let shouldUseFTS = ftsAvailabilityOverride ?? (sqlite3_compileoption_used("ENABLE_FTS5") != 0)
     if version == schemaVersion {
-      return try validateVersionSixSchema(database, shouldUseFTS: shouldUseFTS)
+      return try validateVersionSevenSchema(database, shouldUseFTS: shouldUseFTS)
     }
     if version == 1 {
       let ftsAvailable = try validateVersionOneSchema(database, shouldUseFTS: shouldUseFTS)
@@ -3025,6 +3235,7 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
       try migrateToVersionFour(database)
       try migrateToVersionFive(database)
       try migrateToVersionSix(database)
+      try migrateToVersionSeven(database)
       return ftsAvailable
     }
     if version == 2 {
@@ -3033,6 +3244,7 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
       try migrateToVersionFour(database)
       try migrateToVersionFive(database)
       try migrateToVersionSix(database)
+      try migrateToVersionSeven(database)
       return ftsAvailable
     }
     if version == 3 {
@@ -3040,17 +3252,25 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
       try migrateToVersionFour(database)
       try migrateToVersionFive(database)
       try migrateToVersionSix(database)
+      try migrateToVersionSeven(database)
       return ftsAvailable
     }
     if version == 4 {
       let ftsAvailable = try validateVersionFourSchema(database, shouldUseFTS: shouldUseFTS)
       try migrateToVersionFive(database)
       try migrateToVersionSix(database)
+      try migrateToVersionSeven(database)
       return ftsAvailable
     }
     if version == 5 {
       let ftsAvailable = try validateVersionFiveSchema(database, shouldUseFTS: shouldUseFTS)
       try migrateToVersionSix(database)
+      try migrateToVersionSeven(database)
+      return ftsAvailable
+    }
+    if version == 6 {
+      let ftsAvailable = try validateVersionSixSchema(database, shouldUseFTS: shouldUseFTS)
+      try migrateToVersionSeven(database)
       return ftsAvailable
     }
 
@@ -3139,6 +3359,7 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
     try migrateToVersionFour(database)
     try migrateToVersionFive(database)
     try migrateToVersionSix(database)
+    try migrateToVersionSeven(database)
     return ftsAvailable
   }
 
@@ -3387,6 +3608,52 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
       } catch let rollbackError {
         throw CatalogStoreError.cleanup(
           operation: "catalog.migrate.v6",
+          primaryError: String(describing: primaryError),
+          cleanupError: String(describing: rollbackError)
+        )
+      }
+      throw primaryError
+    }
+  }
+
+  private static func migrateToVersionSeven(_ database: OpaquePointer) throws {
+    try execute("BEGIN IMMEDIATE;", database: database, operation: "catalog.migrate.v7.begin")
+    do {
+      try execute(
+        """
+        CREATE TABLE face_annotations (
+          id TEXT PRIMARY KEY,
+          asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+          x REAL NOT NULL CHECK (x >= 0 AND x <= 1),
+          y REAL NOT NULL CHECK (y >= 0 AND y <= 1),
+          width REAL NOT NULL CHECK (width > 0 AND width <= 1),
+          height REAL NOT NULL CHECK (height > 0 AND height <= 1),
+          label TEXT,
+          normalized_label TEXT,
+          confidence REAL CHECK (confidence IS NULL OR (confidence >= 0 AND confidence <= 1)),
+          annotation_source TEXT NOT NULL,
+          created_ms INTEGER NOT NULL,
+          updated_ms INTEGER NOT NULL,
+          CHECK (x + width <= 1),
+          CHECK (y + height <= 1),
+          CHECK (normalized_label IS NULL OR length(normalized_label) > 0)
+        );
+        CREATE INDEX face_annotations_asset_index
+          ON face_annotations(asset_id, created_ms ASC, id ASC);
+        CREATE INDEX face_annotations_label_index
+          ON face_annotations(normalized_label COLLATE NOCASE, updated_ms DESC, id ASC);
+        PRAGMA user_version=7;
+        """,
+        database: database,
+        operation: "catalog.migrate.v7"
+      )
+      try execute("COMMIT;", database: database, operation: "catalog.migrate.v7.commit")
+    } catch let primaryError {
+      do {
+        try execute("ROLLBACK;", database: database, operation: "catalog.migrate.v7.rollback")
+      } catch let rollbackError {
+        throw CatalogStoreError.cleanup(
+          operation: "catalog.migrate.v7",
           primaryError: String(describing: primaryError),
           cleanupError: String(describing: rollbackError)
         )
@@ -4018,6 +4285,107 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
     return ftsAvailable
   }
 
+  private static func validateVersionSevenSchema(
+    _ database: OpaquePointer,
+    shouldUseFTS: Bool
+  ) throws -> Bool {
+    let ftsAvailable = try validateVersionSixSchema(database, shouldUseFTS: shouldUseFTS)
+    let expectedColumns: [SQLiteSchemaColumn] = [
+      .init(
+        position: 0, name: "id", type: "TEXT", isNotNull: false, defaultValue: nil,
+        primaryKeyPosition: 1),
+      .init(
+        position: 1, name: "asset_id", type: "TEXT", isNotNull: true, defaultValue: nil,
+        primaryKeyPosition: 0),
+      .init(
+        position: 2, name: "x", type: "REAL", isNotNull: true, defaultValue: nil,
+        primaryKeyPosition: 0),
+      .init(
+        position: 3, name: "y", type: "REAL", isNotNull: true, defaultValue: nil,
+        primaryKeyPosition: 0),
+      .init(
+        position: 4, name: "width", type: "REAL", isNotNull: true, defaultValue: nil,
+        primaryKeyPosition: 0),
+      .init(
+        position: 5, name: "height", type: "REAL", isNotNull: true, defaultValue: nil,
+        primaryKeyPosition: 0),
+      .init(
+        position: 6, name: "label", type: "TEXT", isNotNull: false, defaultValue: nil,
+        primaryKeyPosition: 0),
+      .init(
+        position: 7, name: "normalized_label", type: "TEXT", isNotNull: false,
+        defaultValue: nil, primaryKeyPosition: 0),
+      .init(
+        position: 8, name: "confidence", type: "REAL", isNotNull: false, defaultValue: nil,
+        primaryKeyPosition: 0),
+      .init(
+        position: 9, name: "annotation_source", type: "TEXT", isNotNull: true,
+        defaultValue: nil, primaryKeyPosition: 0),
+      .init(
+        position: 10, name: "created_ms", type: "INTEGER", isNotNull: true, defaultValue: nil,
+        primaryKeyPosition: 0),
+      .init(
+        position: 11, name: "updated_ms", type: "INTEGER", isNotNull: true, defaultValue: nil,
+        primaryKeyPosition: 0),
+    ]
+    guard try tableExists(database, name: "face_annotations") else {
+      throw schemaError("The required table 'face_annotations' is missing.")
+    }
+    guard try tableColumns(database, table: "face_annotations") == expectedColumns else {
+      throw schemaError("The table 'face_annotations' does not have the exact version-7 columns.")
+    }
+    try validateSchemaSQL(
+      database,
+      object: "face_annotations",
+      type: "table",
+      expectedSQL: """
+        CREATE TABLE face_annotations (
+          id TEXT PRIMARY KEY,
+          asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+          x REAL NOT NULL CHECK (x >= 0 AND x <= 1),
+          y REAL NOT NULL CHECK (y >= 0 AND y <= 1),
+          width REAL NOT NULL CHECK (width > 0 AND width <= 1),
+          height REAL NOT NULL CHECK (height > 0 AND height <= 1),
+          label TEXT,
+          normalized_label TEXT,
+          confidence REAL CHECK (confidence IS NULL OR (confidence >= 0 AND confidence <= 1)),
+          annotation_source TEXT NOT NULL,
+          created_ms INTEGER NOT NULL,
+          updated_ms INTEGER NOT NULL,
+          CHECK (x + width <= 1),
+          CHECK (y + height <= 1),
+          CHECK (normalized_label IS NULL OR length(normalized_label) > 0)
+        )
+        """
+    )
+    for (index, expectedSQL) in [
+      (
+        "face_annotations_asset_index",
+        "CREATE INDEX face_annotations_asset_index ON face_annotations(asset_id, created_ms ASC, id ASC)"
+      ),
+      (
+        "face_annotations_label_index",
+        "CREATE INDEX face_annotations_label_index ON face_annotations(normalized_label COLLATE NOCASE, updated_ms DESC, id ASC)"
+      ),
+    ] {
+      try validateSchemaSQL(database, object: index, type: "index", expectedSQL: expectedSQL)
+    }
+    try validateForeignKey(
+      database,
+      table: "face_annotations",
+      column: "asset_id",
+      referencedTable: "assets"
+    )
+    for query in [
+      "SELECT id, asset_id, x, y, width, height, label, normalized_label, confidence, annotation_source, created_ms, updated_ms FROM face_annotations WHERE id = ?;",
+      "SELECT id, asset_id, x, y, width, height, label, normalized_label, confidence, annotation_source, created_ms, updated_ms FROM face_annotations WHERE asset_id = ? ORDER BY created_ms ASC, id ASC;",
+      "SELECT id, asset_id, x, y, width, height, label, normalized_label, confidence, annotation_source, created_ms, updated_ms FROM face_annotations WHERE normalized_label LIKE ? ESCAPE '\\' ORDER BY updated_ms DESC, id ASC;",
+    ] {
+      try validateQuery(database, sql: query)
+    }
+    return ftsAvailable
+  }
+
   private static func withStaticStatement<T>(
     _ database: OpaquePointer,
     sql: String,
@@ -4514,6 +4882,17 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
 
   private func milliseconds(_ date: Date) -> Int64 {
     Int64((date.timeIntervalSince1970 * 1_000).rounded())
+  }
+
+  private func normalizeFaceLabel(_ value: String) -> String {
+    value
+      .folding(
+        options: [.caseInsensitive, .diacriticInsensitive],
+        locale: Locale(identifier: "en_US_POSIX")
+      )
+      .split(whereSeparator: \.isWhitespace)
+      .joined(separator: " ")
+      .lowercased(with: Locale(identifier: "en_US_POSIX"))
   }
 
   private func escapeLike(_ value: String) -> String {
