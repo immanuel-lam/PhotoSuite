@@ -25,6 +25,8 @@ struct PhotoSuiteApp: App {
         .frame(minWidth: 1_100, minHeight: 700)
       }
     }
+    .windowStyle(.hiddenTitleBar)
+    .defaultSize(width: 1_280, height: 820)
     .commands {
       InspectorCommands()
       PhotoSuiteCommands(workspace: environment.workspace)

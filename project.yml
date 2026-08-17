@@ -51,6 +51,21 @@ targets:
         ENABLE_HARDENED_RUNTIME: true
         SUPPORTS_MACCATALYST: false
 
+  PhotoSuiteUIContractTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: PhotoSuiteApp/Tests
+    dependencies:
+      - target: PhotoSuite
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.photosuite.PhotoSuiteUIContractTests
+        GENERATE_INFOPLIST_FILE: true
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/PhotoSuite.app/Contents/MacOS/PhotoSuite
+        BUNDLE_LOADER: $(TEST_HOST)
+
 schemes:
   PhotoSuite:
     build:
@@ -58,5 +73,9 @@ schemes:
         PhotoSuite: all
     run:
       config: Debug
+    test:
+      config: Debug
+      targets:
+        - PhotoSuiteUIContractTests
     archive:
       config: Release

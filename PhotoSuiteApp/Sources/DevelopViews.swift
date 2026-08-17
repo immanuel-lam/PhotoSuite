@@ -10,36 +10,60 @@ import SwiftUI
 struct DevelopView: View {
   @Bindable var workspace: PhotoWorkspace
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
   var body: some View {
     ZStack {
-      Color(white: workspace.proofMode ? 0.18 : 0.14).ignoresSafeArea()
+      Color(white: workspace.proofMode ? 0.20 : 0.12).ignoresSafeArea()
 
       if workspace.selectedAsset == nil {
-        ContentUnavailableView(
-          "No Photograph Selected",
-          systemImage: "photo",
-          description: Text("Select a photograph in Library to start developing it.")
-        )
+        ZStack {
+          Color(nsColor: .windowBackgroundColor).ignoresSafeArea()
+          ContentUnavailableView {
+            Label("No Photograph Selected", systemImage: "photo")
+          } description: {
+            Text("Select a photograph in Library to start developing it.")
+          } actions: {
+            Button("Open Library") { workspace.section = .library }
+              .buttonStyle(.borderedProminent)
+          }
+        }
       } else {
         MetalPreviewCanvas(frame: workspace.preview)
           .accessibilityLabel("Develop canvas")
           .accessibilityValue(workspace.selectedAsset?.filename ?? "No photograph")
-          .accessibilityIdentifier("develop-canvas")
+          .accessibilityIdentifier(ModernUIAccessibility.developCanvas)
           .focusable()
 
-        if workspace.preview == nil { ProgressView("Rendering preview…").controlSize(.large) }
+        if workspace.preview == nil {
+          if workspace.errorMessage == nil {
+            ProgressView("Rendering preview…").controlSize(.large)
+          } else {
+            Label("Preview unavailable", systemImage: "photo.badge.exclamationmark")
+              .foregroundStyle(.white.opacity(0.78))
+          }
+        }
 
         if !workspace.proofMode {
-          TransientCanvasControls(
-            workspace: workspace,
-            reduceTransparency: reduceTransparency
-          )
-          .padding(.bottom, 22)
-          .frame(maxHeight: .infinity, alignment: .bottom)
-          .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+          TransientCanvasControls(workspace: workspace)
+            .padding(.bottom, 22)
+            .frame(maxHeight: .infinity, alignment: .bottom)
+            .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
         }
+      }
+    }
+    .overlay(alignment: .topLeading) {
+      if let asset = workspace.selectedAsset {
+        VStack(alignment: .leading, spacing: 3) {
+          Text("Develop")
+            .font(.system(size: 30, weight: .bold))
+            .foregroundStyle(.white)
+          Text(asset.filename)
+            .font(.callout)
+            .foregroundStyle(.white.opacity(0.68))
+        }
+        .padding(.top, 76)
+        .padding(.leading, 24)
+        .allowsHitTesting(false)
       }
     }
     .animation(reduceMotion ? nil : .snappy(duration: 0.22), value: workspace.proofMode)
@@ -49,25 +73,10 @@ struct DevelopView: View {
 @MainActor
 private struct TransientCanvasControls: View {
   @Bindable var workspace: PhotoWorkspace
-  let reduceTransparency: Bool
 
   var body: some View {
-    Group {
-      if #available(macOS 26.0, *) {
-        GlassEffectContainer(spacing: 10) {
-          controlButtons.padding(8)
-        }
-      } else {
-        controlButtons
-          .buttonStyle(.bordered)
-          .padding(8)
-          .background(
-            reduceTransparency
-              ? AnyShapeStyle(Color(nsColor: .controlBackgroundColor))
-              : AnyShapeStyle(.regularMaterial),
-            in: Capsule()
-          )
-      }
+    GlassControlGroup {
+      controlButtons
     }
     .accessibilityIdentifier("canvas-transient-controls")
   }
@@ -91,7 +100,7 @@ private struct TransientCanvasControls: View {
         )
       }
       .help("Compare the original and edited photograph")
-      .accessibilityIdentifier("before-after-button")
+      .accessibilityIdentifier(ModernUIAccessibility.beforeAfterButton)
       .modifier(GlassButtonWhenAvailable(prominent: workspace.showsBefore))
 
       Button {
@@ -106,33 +115,20 @@ private struct TransientCanvasControls: View {
   }
 }
 
-private struct GlassButtonWhenAvailable: ViewModifier {
-  var prominent = false
-
-  @ViewBuilder
-  func body(content: Content) -> some View {
-    if #available(macOS 26.0, *) {
-      if prominent {
-        content.buttonStyle(.glassProminent)
-      } else {
-        content.buttonStyle(.glass)
-      }
-    } else {
-      content
-    }
-  }
-}
-
 @MainActor
 struct DevelopInspector: View {
   @Bindable var workspace: PhotoWorkspace
   @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
-  @Environment(\.colorSchemeContrast) private var contrast
 
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 18) {
-        Text("Adjustments").font(.headline)
+        VStack(alignment: .leading, spacing: 3) {
+          Text("Adjustments").font(.title2.weight(.bold))
+          Text("Tone and presence")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
         AdjustmentRow(workspace: workspace, kind: .exposure, title: "Exposure", range: -5...5)
         AdjustmentRow(workspace: workspace, kind: .contrast, title: "Contrast", range: -1...1)
         AdjustmentRow(workspace: workspace, kind: .highlights, title: "Highlights", range: -1...1)
@@ -164,9 +160,8 @@ struct DevelopInspector: View {
       .padding(18)
       .disabled(workspace.selectedAsset == nil)
     }
-    .background(
-      Color(nsColor: contrast == .increased ? .textBackgroundColor : .windowBackgroundColor)
-    )
+    .background(Color(nsColor: .controlBackgroundColor))
+    .accessibilityIdentifier(ModernUIAccessibility.precisionControlsSurface)
     .overlay(alignment: .topTrailing) {
       if differentiateWithoutColor && workspace.currentRecipe?.operations.isEmpty == false {
         Image(systemName: "slider.horizontal.3")
@@ -174,7 +169,7 @@ struct DevelopInspector: View {
           .padding(8)
       }
     }
-    .accessibilityIdentifier("develop-inspector")
+    .accessibilityIdentifier(ModernUIAccessibility.developInspector)
     .accessibilityHint(
       workspace.selectedAsset == nil
         ? "Select a photograph in Library to enable edit controls."
@@ -212,8 +207,20 @@ private struct AdjustmentRow: View {
       .accessibilityValue(
         Text(workspace.adjustmentValue(kind), format: .number.precision(.fractionLength(2)))
       )
-      .accessibilityIdentifier("adjustment-\(kind.rawValue)")
+      .accessibilityIdentifier(kind.accessibilityIdentifier)
       .help("Adjust \(title.lowercased())")
+    }
+  }
+}
+
+extension AdjustmentKind {
+  fileprivate var accessibilityIdentifier: String {
+    switch self {
+    case .exposure: ModernUIAccessibility.adjustmentExposure
+    case .contrast: "adjustment-contrast"
+    case .highlights: "adjustment-highlights"
+    case .shadows: "adjustment-shadows"
+    case .saturation: "adjustment-saturation"
     }
   }
 }

@@ -12,22 +12,32 @@ struct ContentView: View {
   @Bindable var workspace: PhotoWorkspace
   @AppStorage("jpegQuality") private var jpegQuality = 0.9
   @State private var inspectorPresented = false
+  private let sidebarWidth: CGFloat = 300
 
   var body: some View {
-    NavigationSplitView {
-      WorkspaceSidebar(workspace: workspace)
-        .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 280)
-    } detail: {
+    ZStack(alignment: .leading) {
       workspaceContent
-        .navigationTitle(navigationTitle)
-        .toolbar { toolbarContent }
+        .ignoresSafeArea()
+
+      if workspace.section == .library {
+        WorkspaceSidebar(workspace: workspace)
+          .frame(width: sidebarWidth)
+          .padding(.leading, 14)
+          .padding(.vertical, 14)
+          .transition(.move(edge: .leading).combined(with: .opacity))
+          .zIndex(2)
+      }
     }
-    .navigationSplitViewStyle(.balanced)
+    .overlay(alignment: .topTrailing) {
+      WorkspaceCommandBar(workspace: workspace)
+        .padding(.top, 14)
+        .padding(.trailing, 16)
+        .zIndex(3)
+    }
     .inspector(isPresented: $inspectorPresented) {
       DevelopInspector(workspace: workspace)
-        .inspectorColumnWidth(min: 280, ideal: 310, max: 380)
+        .inspectorColumnWidth(min: 300, ideal: 320, max: 380)
     }
-    .searchable(text: $workspace.searchText, placement: .toolbar, prompt: "Search filenames")
     .fileImporter(
       isPresented: $workspace.isImporting,
       allowedContentTypes: [.image],
@@ -48,10 +58,11 @@ struct ContentView: View {
       presentExportPanel()
     }
     .task { await workspace.reopen() }
-    .overlay(alignment: .top) {
+    .overlay(alignment: .bottom) {
       if let error = workspace.errorMessage {
         ErrorBanner(message: error) { workspace.errorMessage = nil }
-          .padding(.top, 8)
+          .padding(.bottom, 18)
+          .zIndex(4)
       }
     }
   }
@@ -59,39 +70,14 @@ struct ContentView: View {
   @ViewBuilder
   private var workspaceContent: some View {
     switch workspace.section {
-    case .library: LibraryView(workspace: workspace)
-    case .develop: DevelopView(workspace: workspace)
+    case .library:
+      LibraryView(workspace: workspace, sidebarWidth: sidebarWidth)
+    case .develop:
+      DevelopView(workspace: workspace)
     case .deliver:
       DeliverView(workspace: workspace, quality: $jpegQuality) {
         workspace.isChoosingExportDestination = true
       }
-    }
-  }
-
-  private var navigationTitle: String {
-    switch workspace.section {
-    case .library: "Library"
-    case .develop: workspace.selectedAsset?.filename ?? "Develop"
-    case .deliver: "Deliver"
-    }
-  }
-
-  @ToolbarContentBuilder
-  private var toolbarContent: some ToolbarContent {
-    ToolbarItemGroup(placement: .primaryAction) {
-      Button {
-        workspace.isImporting = true
-      } label: {
-        Label("Import Photographs", systemImage: "square.and.arrow.down")
-      }
-      .help("Import common images or Apple-supported RAW photographs")
-      .accessibilityIdentifier("import-button")
-
-      Toggle(isOn: $workspace.proofMode) {
-        Label("Proof Mode", systemImage: "rectangle.inset.filled")
-      }
-      .help("Hide canvas controls and use a neutral surround")
-      .accessibilityIdentifier("proof-mode-toggle")
     }
   }
 
@@ -112,6 +98,90 @@ struct ContentView: View {
   }
 }
 
+@MainActor
+private struct WorkspaceCommandBar: View {
+  @Bindable var workspace: PhotoWorkspace
+
+  var body: some View {
+    HStack(spacing: 10) {
+      if workspace.section == .library {
+        GlassControlGroup {
+          HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+              .foregroundStyle(.secondary)
+            TextField("Search Library", text: $workspace.searchText)
+              .textFieldStyle(.plain)
+              .frame(width: 170)
+              .accessibilityIdentifier(ModernUIAccessibility.librarySearchField)
+            if !workspace.searchText.isEmpty {
+              Button {
+                workspace.searchText = ""
+              } label: {
+                Image(systemName: "xmark.circle.fill")
+              }
+              .buttonStyle(.plain)
+              .foregroundStyle(.secondary)
+              .accessibilityLabel("Clear search")
+            }
+          }
+          .padding(.horizontal, 8)
+          .frame(height: 28)
+        }
+      } else {
+        WorkspaceModeControl(workspace: workspace)
+      }
+
+      GlassControlGroup {
+        HStack(spacing: 4) {
+          Button {
+            workspace.isImporting = true
+          } label: {
+            Label("Import Photographs", systemImage: "plus")
+          }
+          .labelStyle(.iconOnly)
+          .help("Import common images or Apple-supported RAW photographs")
+          .accessibilityIdentifier(ModernUIAccessibility.importButton)
+          .modifier(GlassButtonWhenAvailable())
+
+          Toggle(isOn: $workspace.proofMode) {
+            Label("Proof Mode", systemImage: "rectangle.inset.filled")
+          }
+          .toggleStyle(.button)
+          .labelStyle(.iconOnly)
+          .help("Hide canvas controls and use a neutral surround")
+          .accessibilityIdentifier(ModernUIAccessibility.proofModeToggle)
+          .modifier(GlassButtonWhenAvailable(prominent: workspace.proofMode))
+        }
+      }
+    }
+  }
+}
+
+@MainActor
+private struct WorkspaceModeControl: View {
+  @Bindable var workspace: PhotoWorkspace
+
+  var body: some View {
+    GlassControlGroup {
+      HStack(spacing: 4) {
+        ForEach(WorkspaceSection.allCases) { section in
+          Button {
+            workspace.section = section
+          } label: {
+            Label(section.title, systemImage: section.symbol)
+          }
+          .labelStyle(.iconOnly)
+          .help(section.title)
+          .accessibilityIdentifier(section.accessibilityIdentifier)
+          .accessibilityAddTraits(workspace.section == section ? .isSelected : [])
+          .modifier(GlassButtonWhenAvailable(prominent: workspace.section == section))
+        }
+      }
+    }
+    .accessibilityIdentifier(ModernUIAccessibility.workspaceNavigation)
+  }
+}
+
 private struct ErrorBanner: View {
   let message: String
   let dismiss: () -> Void
@@ -124,8 +194,8 @@ private struct ErrorBanner: View {
     }
     .padding(.horizontal, 14)
     .padding(.vertical, 9)
-    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-    .shadow(radius: 6, y: 2)
+    .modifier(NavigationGlassSurface(cornerRadius: 12))
+    .shadow(color: .black.opacity(0.18), radius: 16, y: 6)
     .accessibilityIdentifier("error-banner")
   }
 }
