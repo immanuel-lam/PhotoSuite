@@ -45,10 +45,12 @@ they are not a Lightroom-equivalent implementation.
 
 Mask data, authoring, duplicate/synchronise requests, stale-result validation,
 deterministic rasterisation, graph composition, masked exposure, and masked
-colour grading exist. Apple Vision foreground, subject, and person selection
-is available offline; sky, object, background, landscape, real depth,
-denoise, super-resolution, healing, clone, red-eye, and generative functions
-remain incomplete. No proprietary or network-only model pack is bundled.
+colour grading exist. Bounded deterministic clone and healing recipes are
+also available in the render core, but they are not texture-aware Lightroom
+equivalents. Apple Vision foreground, subject, and person selection is
+available offline; sky, object, background, landscape, real depth, denoise,
+super-resolution, red-eye, and generative functions remain incomplete. No
+proprietary or network-only model pack is bundled.
 A common-image preview fallback is available when a source is not accepted
 as RAW; this is not a supported-camera list. A licensed real RAW fixture is
 absent, so the real RAW fixture test is skipped.
