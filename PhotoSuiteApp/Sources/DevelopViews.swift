@@ -6,6 +6,7 @@ import AppKit
 import PhotoDomain
 import PhotoWorkflow
 import SwiftUI
+import UniformTypeIdentifiers
 
 @MainActor
 struct DevelopView: View {
@@ -214,6 +215,7 @@ struct DevelopInspector: View {
 private struct DevelopPresetControls: View {
   @Bindable var workspace: PhotoWorkspace
   @Binding var name: String
+  @State private var isImporting = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -231,6 +233,11 @@ private struct DevelopPresetControls: View {
         .buttonStyle(.borderedProminent)
         .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         .accessibilityIdentifier("develop-preset-save")
+        Button("Import XMP…") {
+          isImporting = true
+        }
+        .buttonStyle(.bordered)
+        .accessibilityIdentifier("develop-preset-import-xmp")
       }
 
       if workspace.developPresets.isEmpty {
@@ -262,6 +269,14 @@ private struct DevelopPresetControls: View {
       }
     }
     .accessibilityIdentifier("develop-preset-controls")
+    .fileImporter(
+      isPresented: $isImporting,
+      allowedContentTypes: [.xml],
+      allowsMultipleSelection: false
+    ) { result in
+      guard case .success(let urls) = result, let url = urls.first else { return }
+      Task { await workspace.importDevelopPreset(from: url) }
+    }
   }
 }
 

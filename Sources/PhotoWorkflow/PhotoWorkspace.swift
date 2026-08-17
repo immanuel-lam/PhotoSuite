@@ -665,6 +665,32 @@ public final class PhotoWorkspace {
     }
   }
 
+  /// Imports the supported, standards-based fields from an Adobe XMP sidecar as a durable preset.
+  /// Unsupported fields are reported as a warning instead of being silently applied.
+  public func importDevelopPreset(from url: URL) async {
+    guard let libraryCatalog = catalog as? any LibraryCatalogStore else {
+      record(PhotoWorkspaceError.libraryStoreUnavailable, operation: "develop.preset.import")
+      return
+    }
+    do {
+      let result = try XMPDevelopPresetImporter.importResult(from: url)
+      let saved = try await libraryCatalog.saveDevelopPreset(
+        CatalogDevelopPresetSaveRequest(preset: result.preset)
+      ).preset
+      developPresets.removeAll { $0.id == saved.id }
+      developPresets.append(saved)
+      lastError = nil
+      if result.skippedFields.isEmpty {
+        errorMessage = nil
+      } else {
+        errorMessage =
+          "Imported \(saved.name). Unsupported XMP fields were skipped: \(result.skippedFields.joined(separator: ", "))."
+      }
+    } catch {
+      record(error, operation: "develop.preset.import")
+    }
+  }
+
   /// Applies a durable Develop preset to the selected asset or virtual copy.
   public func applyDevelopPreset(_ presetID: UUID) async {
     guard let assetID = selectedAssetID else {

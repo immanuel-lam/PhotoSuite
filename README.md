@@ -71,8 +71,9 @@ verified Vision subset, texture-aware retouching, and production support for
 the full range of Lightroom formats remain incomplete. Embedded XMP writing, full
 metadata batch editing, complete keyword-taxonomy authoring, face workflows, and
 full virtual-copy batch/export workflow support are also incomplete. An atomic XMP
-sidecar writer/reader exists as a tested interoperability core, but it is not yet a
-complete metadata workflow. Cloud services, mobile clients, and web editing are out
+sidecar writer/reader and a bounded standards-based Adobe XMP Develop-preset
+importer exist as tested interoperability cores, but proprietary Lightroom
+catalog parsing is not implemented. Cloud services, mobile clients, and web editing are out
 of scope. There is no signed, notarized,
 reproducible, or published application release. Do not use this pre-alpha
 revision for production photographs.
