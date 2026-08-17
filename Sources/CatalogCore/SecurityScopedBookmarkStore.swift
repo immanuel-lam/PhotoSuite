@@ -39,7 +39,7 @@ public enum SecurityScopedBookmarkStore {
         relativeTo: nil,
         bookmarkDataIsStale: &isStale
       )
-      let renewedData = isStale ? try create(url: url) : nil
+      let renewedData = isStale ? try renew(url: url) : nil
       return ResolvedSecurityScopedBookmark(url: url, isStale: isStale, renewedData: renewedData)
     } catch let error as CatalogStoreError {
       throw error
@@ -60,5 +60,38 @@ public enum SecurityScopedBookmarkStore {
       }
     }
     return try operation()
+  }
+
+  static func renewForTesting(
+    url: URL,
+    access: () -> Bool,
+    stopAccess: () -> Void,
+    create: (URL) throws -> Data
+  ) throws -> Data {
+    try renew(url: url, access: access, stopAccess: stopAccess, create: create)
+  }
+
+  private static func renew(url: URL) throws -> Data {
+    try renew(
+      url: url,
+      access: { url.startAccessingSecurityScopedResource() },
+      stopAccess: { url.stopAccessingSecurityScopedResource() },
+      create: create
+    )
+  }
+
+  private static func renew(
+    url: URL,
+    access: () -> Bool,
+    stopAccess: () -> Void,
+    create: (URL) throws -> Data
+  ) throws -> Data {
+    let started = access()
+    defer {
+      if started {
+        stopAccess()
+      }
+    }
+    return try create(url)
   }
 }

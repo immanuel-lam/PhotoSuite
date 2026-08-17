@@ -103,59 +103,67 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
 
   private func storeAsset(_ asset: PhotoAsset) throws {
     try withTransaction(operation: "asset.upsert") {
-      try withStatement(
-        """
-        INSERT INTO assets (
-          id, source_url, filename, type_identifier, fingerprint_json, import_ms,
-          capture_ms, dimensions_json, rating, color_label, is_missing
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-          source_url=excluded.source_url,
-          filename=excluded.filename,
-          type_identifier=excluded.type_identifier,
-          fingerprint_json=excluded.fingerprint_json,
-          import_ms=excluded.import_ms,
-          capture_ms=excluded.capture_ms,
-          dimensions_json=excluded.dimensions_json,
-          rating=excluded.rating,
-          color_label=excluded.color_label,
-          is_missing=excluded.is_missing;
-        """,
-        operation: "asset.upsert"
-      ) { statement in
-        try bind(assetID: asset.id, to: statement, index: 1, operation: "asset.upsert")
-        try bind(
-          asset.sourceURL.absoluteString, to: statement, index: 2, operation: "asset.upsert"
-        )
-        try bind(asset.filename, to: statement, index: 3, operation: "asset.upsert")
-        try bind(asset.typeIdentifier, to: statement, index: 4, operation: "asset.upsert")
-        try bind(
-          try encode(asset.fingerprint, operation: "asset.upsert.fingerprint"),
-          to: statement, index: 5, operation: "asset.upsert")
-        try bind(
-          milliseconds(asset.importDate), to: statement, index: 6, operation: "asset.upsert"
-        )
-        try bind(
-          asset.captureDate.map(milliseconds), to: statement, index: 7,
-          operation: "asset.upsert")
-        try bind(
-          try asset.pixelDimensions.map {
-            try encode($0, operation: "asset.upsert.dimensions")
-          },
-          to: statement,
-          index: 8,
-          operation: "asset.upsert"
-        )
-        try bind(Int64(asset.rating), to: statement, index: 9, operation: "asset.upsert")
-        try bind(
-          asset.colorLabel?.rawValue, to: statement, index: 10, operation: "asset.upsert")
-        try bind(
-          asset.isMissing ? Int64(1) : Int64(0), to: statement, index: 11,
-          operation: "asset.upsert")
-        try stepDone(statement, operation: "asset.upsert")
-      }
-      try updateSearchIndex(for: asset)
+      try storeAssetInTransaction(asset)
     }
+  }
+
+  private func storeAssetInTransaction(_ asset: PhotoAsset) throws {
+    try withStatement(
+      """
+      INSERT INTO assets (
+        id, source_url, filename, type_identifier, fingerprint_json, import_ms,
+        capture_ms, dimensions_json, rating, color_label, is_missing
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        source_url=excluded.source_url,
+        filename=excluded.filename,
+        type_identifier=excluded.type_identifier,
+        fingerprint_json=excluded.fingerprint_json,
+        import_ms=excluded.import_ms,
+        capture_ms=excluded.capture_ms,
+        dimensions_json=excluded.dimensions_json,
+        rating=excluded.rating,
+        color_label=excluded.color_label,
+        is_missing=excluded.is_missing;
+      """,
+      operation: "asset.upsert"
+    ) { statement in
+      try bind(assetID: asset.id, to: statement, index: 1, operation: "asset.upsert")
+      try bind(
+        asset.sourceURL.absoluteString, to: statement, index: 2, operation: "asset.upsert"
+      )
+      try bind(asset.filename, to: statement, index: 3, operation: "asset.upsert")
+      try bind(asset.typeIdentifier, to: statement, index: 4, operation: "asset.upsert")
+      try bind(
+        try encode(asset.fingerprint, operation: "asset.upsert.fingerprint"),
+        to: statement, index: 5, operation: "asset.upsert")
+      try bind(
+        milliseconds(asset.importDate), to: statement, index: 6, operation: "asset.upsert"
+      )
+      try bind(
+        asset.captureDate.map(milliseconds), to: statement, index: 7,
+        operation: "asset.upsert")
+      try bind(
+        try asset.pixelDimensions.map {
+          try encode($0, operation: "asset.upsert.dimensions")
+        },
+        to: statement,
+        index: 8,
+        operation: "asset.upsert"
+      )
+      try bind(Int64(asset.rating), to: statement, index: 9, operation: "asset.upsert")
+      try bind(
+        try asset.colorLabel.map { try encode($0, operation: "asset.upsert.colorLabel") },
+        to: statement,
+        index: 10,
+        operation: "asset.upsert"
+      )
+      try bind(
+        asset.isMissing ? Int64(1) : Int64(0), to: statement, index: 11,
+        operation: "asset.upsert")
+      try stepDone(statement, operation: "asset.upsert")
+    }
+    try updateSearchIndex(for: asset)
   }
 
   public func fetchAsset(
@@ -350,6 +358,20 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
   public func relinkAsset(
     _ request: CatalogRelinkAssetRequest
   ) async throws -> CatalogRelinkAssetResult {
+    try relinkAsset(request, bookmarkCreator: SecurityScopedBookmarkStore.create)
+  }
+
+  func relinkAssetForTesting(
+    _ request: CatalogRelinkAssetRequest,
+    bookmarkCreator: (URL) throws -> Data
+  ) throws -> CatalogRelinkAssetResult {
+    try relinkAsset(request, bookmarkCreator: bookmarkCreator)
+  }
+
+  private func relinkAsset(
+    _ request: CatalogRelinkAssetRequest,
+    bookmarkCreator: (URL) throws -> Data
+  ) throws -> CatalogRelinkAssetResult {
     guard let existing = try asset(id: request.assetID, operation: "asset.relink") else {
       throw CatalogStoreError.notFound(
         operation: "asset.relink", message: "The asset does not exist.")
@@ -372,10 +394,17 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
       throw CatalogStoreError.invalidRequest(
         operation: "asset.relink", message: "The relinked asset is invalid.")
     }
-    try storeAsset(relinked)
-    // A bookmark is an optional access aid. The durable relink must succeed even if the
-    // current process cannot create a scope for this URL.
-    _ = try? createBookmark(forAssetID: relinked.id)
+    // Create access before durable mutation. A scope failure is recoverable, but an old
+    // bookmark must never survive a successful relink.
+    let replacementBookmark = try? bookmarkCreator(relinked.sourceURL)
+    try withTransaction(operation: "asset.relink") {
+      try storeAssetInTransaction(relinked)
+      if let replacementBookmark {
+        try storeBookmarkInTransaction(replacementBookmark, forAssetID: relinked.id)
+      } else {
+        try deleteBookmarkInTransaction(forAssetID: relinked.id)
+      }
+    }
     return CatalogRelinkAssetResult(asset: relinked)
   }
 
@@ -519,18 +548,19 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
       return CatalogBackupResult(destinationURL: request.destinationURL)
     } catch let primaryError {
       let closeCode = sqlite3_close_v2(destination)
-      try? FileManager.default.removeItem(at: request.destinationURL)
-      try? FileManager.default.removeItem(
-        at: URL(fileURLWithPath: request.destinationURL.path + "-wal"))
-      try? FileManager.default.removeItem(
-        at: URL(fileURLWithPath: request.destinationURL.path + "-shm"))
-      guard closeCode == SQLITE_OK else {
+      var cleanupErrors = backupCleanupErrors(for: request.destinationURL)
+      if closeCode != SQLITE_OK {
+        cleanupErrors.append(
+          Self.sqliteError(
+            operation: "catalog.backup.close", database: destination, code: closeCode
+          ).localizedDescription
+        )
+      }
+      guard cleanupErrors.isEmpty else {
         throw CatalogStoreError.cleanup(
           operation: "catalog.backup.close",
           primaryError: String(describing: primaryError),
-          cleanupError: Self.sqliteError(
-            operation: "catalog.backup.close", database: destination, code: closeCode
-          ).localizedDescription
+          cleanupError: cleanupErrors.joined(separator: " | ")
         )
       }
       throw primaryError
@@ -659,6 +689,10 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
       throw CatalogStoreError.notFound(
         operation: "bookmark.write", message: "The asset does not exist.")
     }
+    try storeBookmarkInTransaction(data, forAssetID: assetID)
+  }
+
+  private func storeBookmarkInTransaction(_ data: Data, forAssetID assetID: UUID) throws {
     try withStatement(
       """
       INSERT INTO asset_bookmarks (asset_id, bookmark, updated_ms) VALUES (?, ?, ?)
@@ -672,6 +706,15 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
       try bind(data, to: statement, index: 2, operation: "bookmark.write")
       try bind(milliseconds(Date()), to: statement, index: 3, operation: "bookmark.write")
       try stepDone(statement, operation: "bookmark.write")
+    }
+  }
+
+  private func deleteBookmarkInTransaction(forAssetID assetID: UUID) throws {
+    try withStatement(
+      "DELETE FROM asset_bookmarks WHERE asset_id = ?;", operation: "bookmark.delete"
+    ) { statement in
+      try bind(assetID: assetID, to: statement, index: 1, operation: "bookmark.delete")
+      try stepDone(statement, operation: "bookmark.delete")
     }
   }
 
@@ -858,6 +901,23 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
     }
   }
 
+  private func backupCleanupErrors(for destinationURL: URL) -> [String] {
+    let artifacts = [
+      destinationURL,
+      URL(fileURLWithPath: destinationURL.path + "-wal"),
+      URL(fileURLWithPath: destinationURL.path + "-shm"),
+    ]
+    return artifacts.compactMap { artifact in
+      guard FileManager.default.fileExists(atPath: artifact.path) else { return nil }
+      do {
+        try FileManager.default.removeItem(at: artifact)
+        return nil
+      } catch {
+        return "\(artifact.lastPathComponent): \(error.localizedDescription)"
+      }
+    }
+  }
+
   private func columnData(_ statement: OpaquePointer, column: Int32, operation: String) throws
     -> Data
   {
@@ -947,7 +1007,9 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
         captureDate: optionalDate(statement, column: 6),
         pixelDimensions: dimensions,
         rating: integerRating,
-        colorLabel: optionalColumnString(statement, column: 9).flatMap(ColorLabel.init(rawValue:)),
+        colorLabel: try optionalColumnData(statement, column: 9).map {
+          try decode(ColorLabel.self, from: $0, operation: operation)
+        },
         isMissing: missing == 1
       )
     else {
@@ -1053,7 +1115,7 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
           capture_ms INTEGER,
           dimensions_json BLOB,
           rating INTEGER NOT NULL CHECK (rating BETWEEN 0 AND 5),
-          color_label TEXT,
+          color_label BLOB,
           is_missing INTEGER NOT NULL CHECK (is_missing IN (0, 1))
         );
         CREATE INDEX assets_import_ms_index ON assets(import_ms);
@@ -1133,16 +1195,21 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
     guard prepareCode == SQLITE_OK, let statement else {
       throw sqliteError(operation: "\(operation).prepare", database: database, code: prepareCode)
     }
+    let result: Result<T, Error>
     do {
-      let result = try body(statement)
-      let finalizeCode = sqlite3_finalize(statement)
+      result = .success(try body(statement))
+    } catch {
+      result = .failure(error)
+    }
+    let finalizeCode = sqlite3_finalize(statement)
+    switch result {
+    case .success(let value):
       guard finalizeCode == SQLITE_OK else {
         throw sqliteError(
           operation: "\(operation).finalize", database: database, code: finalizeCode)
       }
-      return result
-    } catch let primaryError {
-      let finalizeCode = sqlite3_finalize(statement)
+      return value
+    case .failure(let primaryError):
       guard finalizeCode == SQLITE_OK else {
         throw CatalogStoreError.cleanup(
           operation: "\(operation).finalize",
@@ -1197,6 +1264,35 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
         throw schemaError("The table '\(table)' does not contain the required version-1 columns.")
       }
     }
+    try validateSchemaSQL(
+      database,
+      object: "assets",
+      type: "table",
+      requiredFragments: [
+        "id TEXT PRIMARY KEY", "source_url TEXT NOT NULL", "filename TEXT NOT NULL",
+        "fingerprint_json BLOB NOT NULL", "import_ms INTEGER NOT NULL",
+        "rating INTEGER NOT NULL CHECK (rating BETWEEN 0 AND 5)", "color_label BLOB",
+        "is_missing INTEGER NOT NULL CHECK (is_missing IN (0, 1))",
+      ]
+    )
+    try validateSchemaSQL(
+      database,
+      object: "edit_recipes",
+      type: "table",
+      requiredFragments: [
+        "asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE",
+        "PRIMARY KEY (asset_id, revision)",
+      ]
+    )
+    try validateSchemaSQL(
+      database,
+      object: "asset_bookmarks",
+      type: "table",
+      requiredFragments: [
+        "asset_id TEXT PRIMARY KEY REFERENCES assets(id) ON DELETE CASCADE",
+        "bookmark BLOB NOT NULL",
+      ]
+    )
     for index in [
       "assets_import_ms_index", "assets_capture_ms_index", "assets_filename_index",
       "catalog_jobs_updated_ms_index",
@@ -1205,6 +1301,12 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
         throw schemaError("The required index '\(index)' is missing.")
       }
     }
+    try validateSchemaSQL(
+      database, object: "assets_filename_index", type: "index",
+      requiredFragments: ["ON assets(filename COLLATE NOCASE)"])
+    try validateSchemaSQL(
+      database, object: "catalog_jobs_updated_ms_index", type: "index",
+      requiredFragments: ["ON catalog_jobs(updated_ms, created_ms)"])
     try validateForeignKey(
       database, table: "edit_recipes", column: "asset_id", referencedTable: "assets")
     try validateForeignKey(
@@ -1249,6 +1351,36 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
       if stepCode == SQLITE_DONE { return false }
       throw sqliteError(
         operation: "catalog.validate.index.step", database: database, code: stepCode)
+    }
+  }
+
+  private static func validateSchemaSQL(
+    _ database: OpaquePointer,
+    object: String,
+    type: String,
+    requiredFragments: [String]
+  ) throws {
+    let sql: String = try withStaticStatement(
+      database,
+      sql: "SELECT sql FROM sqlite_master WHERE type = ? AND name = ?;",
+      operation: "catalog.validate.sql"
+    ) { statement in
+      guard sqlite3_bind_text(statement, 1, type, -1, sqliteTransient) == SQLITE_OK,
+        sqlite3_bind_text(statement, 2, object, -1, sqliteTransient) == SQLITE_OK
+      else {
+        throw sqliteError(
+          operation: "catalog.validate.sql.bind", database: database,
+          code: sqlite3_errcode(database))
+      }
+      guard sqlite3_step(statement) == SQLITE_ROW, let value = sqlite3_column_text(statement, 0)
+      else {
+        throw schemaError("The SQL definition for '\(object)' is missing.")
+      }
+      return String(cString: value)
+    }
+    let compact = sql.replacingOccurrences(of: "\n", with: " ")
+    for fragment in requiredFragments where !compact.localizedCaseInsensitiveContains(fragment) {
+      throw schemaError("The SQL definition for '\(object)' is not version-1 compatible.")
     }
   }
 

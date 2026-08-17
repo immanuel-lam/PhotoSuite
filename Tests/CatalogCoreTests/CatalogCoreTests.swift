@@ -260,6 +260,63 @@ final class CatalogCoreTests: XCTestCase {
     XCTAssertEqual(resolved.url.standardizedFileURL, relinkedURL.standardizedFileURL)
   }
 
+  func testRelinkBookmarkFailureDeletesTheOldBookmark() async throws {
+    let directory = try makeTemporaryDirectory()
+    let originalURL = directory.appendingPathComponent("original.jpg")
+    try Data([0x01]).write(to: originalURL)
+    let store = try SQLiteCatalogStore(
+      catalogURL: directory.appendingPathComponent("catalog.sqlite"))
+    let asset = try makeAsset(filename: "original.jpg", sourceURL: originalURL)
+    _ = try await store.upsertAsset(.init(asset: asset))
+    _ = try await store.createBookmark(forAssetID: asset.id)
+
+    _ = try await store.relinkAssetForTesting(
+      .init(
+        assetID: asset.id,
+        sourceURL: URL(fileURLWithPath: "/tmp/unavailable.jpg"),
+        filename: "unavailable.jpg",
+        typeIdentifier: "public.jpeg",
+        fingerprint: try fingerprint(character: "c")
+      ),
+      bookmarkCreator: { _ in
+        throw CatalogStoreError.bookmark(operation: "test", message: "no scope")
+      }
+    )
+    let bookmark = try await store.bookmarkData(forAssetID: asset.id)
+    XCTAssertNil(bookmark)
+  }
+
+  func testUnknownReservedColorLabelSurvivesReopen() async throws {
+    let catalogURL = try makeCatalogURL()
+    let asset = try makeAsset(
+      filename: "unknown-color.jpg", colorLabel: .unknown("red"))
+    var firstStore: SQLiteCatalogStore? = try SQLiteCatalogStore(catalogURL: catalogURL)
+    _ = try await firstStore!.upsertAsset(.init(asset: asset))
+    try await firstStore!.close()
+    firstStore = nil
+    let reopened = try SQLiteCatalogStore(catalogURL: catalogURL)
+    let fetched = try await reopened.fetchAsset(.init(assetID: asset.id)).asset
+    XCTAssertEqual(fetched?.colorLabel, .unknown("red"))
+  }
+
+  func testStaleBookmarkRenewalBracketsScopeAccess() throws {
+    let url = URL(fileURLWithPath: "/tmp/renewed.jpg")
+    var started = 0
+    var stopped = 0
+    let renewed = try SecurityScopedBookmarkStore.renewForTesting(
+      url: url,
+      access: {
+        started += 1
+        return true
+      },
+      stopAccess: { stopped += 1 },
+      create: { _ in Data([0x01]) }
+    )
+    XCTAssertEqual(renewed, Data([0x01]))
+    XCTAssertEqual(started, 1)
+    XCTAssertEqual(stopped, 1)
+  }
+
   func testFutureSchemaVersionIsRejectedWithoutChangingTheCatalog() throws {
     let catalogURL = try makeCatalogURL()
     let database = try openWritableDatabase(catalogURL)
@@ -426,6 +483,7 @@ final class CatalogCoreTests: XCTestCase {
     importDate: TimeInterval = 1_700_000_000,
     captureDate: TimeInterval? = nil,
     sourceURL: URL? = nil,
+    colorLabel: ColorLabel? = nil,
     rating: Int = 0
   ) throws -> PhotoAsset {
     try XCTUnwrap(
@@ -437,7 +495,8 @@ final class CatalogCoreTests: XCTestCase {
         importDate: Date(timeIntervalSince1970: importDate),
         captureDate: captureDate.map { Date(timeIntervalSince1970: $0) },
         pixelDimensions: nil,
-        rating: rating
+        rating: rating,
+        colorLabel: colorLabel
       )
     )
   }
