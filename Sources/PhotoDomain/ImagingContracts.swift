@@ -108,13 +108,42 @@ public struct RawCapabilityRequest: Codable, Hashable, Sendable {
   }
 }
 
+public enum RawSourceKind: String, Codable, Hashable, Sendable {
+  case unknown
+  case cirawRaw
+  case dngContainer
+  case imageIOImage
+  case unsupported
+}
+
 public struct RawCapabilityResult: Codable, Hashable, Sendable {
   public let supportedCameraModels: [String]
   public let supportedDecoderVersions: [String]
+  public let sourceKind: RawSourceKind
 
-  public init(supportedCameraModels: [String], supportedDecoderVersions: [String]) {
+  public init(
+    supportedCameraModels: [String],
+    supportedDecoderVersions: [String],
+    sourceKind: RawSourceKind = .unknown
+  ) {
     self.supportedCameraModels = supportedCameraModels
     self.supportedDecoderVersions = supportedDecoderVersions
+    self.sourceKind = sourceKind
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case supportedCameraModels
+    case supportedDecoderVersions
+    case sourceKind
+  }
+
+  public init(from decoder: any Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    self.supportedCameraModels = try container.decode([String].self, forKey: .supportedCameraModels)
+    self.supportedDecoderVersions = try container.decode(
+      [String].self, forKey: .supportedDecoderVersions)
+    self.sourceKind =
+      try container.decodeIfPresent(RawSourceKind.self, forKey: .sourceKind) ?? .unknown
   }
 }
 

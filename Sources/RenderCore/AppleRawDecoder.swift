@@ -166,19 +166,23 @@ public actor AppleRawDecoder: RawDecoder {
   public func capabilities(_ request: RawCapabilityRequest) async throws -> RawCapabilityResult {
     try Task.checkCancellation()
     let versions: [String]
+    let detectedSourceKind: RawSourceKind
     if let sourceURL = request.sourceURL,
       let raw = rawFilterProvider.makeFilter(imageURL: sourceURL),
       isRealRAWFilter(raw)
     {
       versions = raw.supportedDecoderVersions
+      detectedSourceKind = .cirawRaw
     } else {
       versions = []
+      detectedSourceKind = request.sourceURL.map { self.sourceKind(for: $0) } ?? .unknown
     }
     try Task.checkCancellation()
 
     return RawCapabilityResult(
       supportedCameraModels: CIRAWFilter.supportedCameraModels,
-      supportedDecoderVersions: versions
+      supportedDecoderVersions: versions,
+      sourceKind: detectedSourceKind
     )
   }
 
@@ -866,6 +870,29 @@ public actor AppleRawDecoder: RawDecoder {
 
   private nonisolated static func isNoRAWDecoderVersion(_ version: String) -> Bool {
     version.caseInsensitiveCompare("None") == .orderedSame
+  }
+
+  private func sourceKind(for sourceURL: URL) -> RawSourceKind {
+    if let inspection = try? DNGMetadataReader().inspect(
+      DNGInspectionRequest(sourceURL: sourceURL)
+    ) {
+      switch inspection.state {
+      case .valid, .unsupportedVersion, .unsupportedContainer, .malformed:
+        if inspection.byteOrder != nil {
+          return .dngContainer
+        }
+      case .notDNG:
+        break
+      }
+    }
+
+    if let source = CGImageSourceCreateWithURL(sourceURL as CFURL, nil),
+      let typeIdentifier = CGImageSourceGetType(source) as String?,
+      UTType(typeIdentifier)?.conforms(to: .image) == true
+    {
+      return .imageIOImage
+    }
+    return .unsupported
   }
 
   private func normalized(_ image: CIImage, sourceURL: URL) throws -> CIImage {
