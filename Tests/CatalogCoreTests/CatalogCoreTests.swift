@@ -91,6 +91,41 @@ final class CatalogCoreTests: XCTestCase {
     XCTAssertEqual(blankResults, [])
   }
 
+  func testSearchMatchesFilenameTypeAndSourceURLWithQuotesAndBackslashes() async throws {
+    let store = try SQLiteCatalogStore(
+      catalogURL: try makeCatalogURL(), ftsAvailabilityOverride: false)
+    let source = URL(fileURLWithPath: "/tmp/quote's\\source.jpg")
+    let asset = try makeAsset(
+      filename: "quote's\\name.jpg", typeIdentifier: "com.example.special-type", sourceURL: source)
+    _ = try await store.upsertAsset(.init(asset: asset))
+    for query in ["quote's\\name", "special-type", source.absoluteString] {
+      let results = try await store.searchAssets(.init(query: query)).assets
+      XCTAssertEqual(results, [asset])
+    }
+  }
+
+  func testInvalidCatalogPathAndMissingRecipeAssetAreTypedFailures() async throws {
+    XCTAssertThrowsError(
+      try SQLiteCatalogStore(catalogURL: URL(string: "https://example.com/catalog")!))
+    let store = try SQLiteCatalogStore(catalogURL: try makeCatalogURL())
+    do {
+      _ = try await store.saveRecipe(.init(recipe: makeRecipe(assetID: UUID(), revision: 1)))
+      XCTFail("Expected a missing asset error.")
+    } catch let error as CatalogStoreError {
+      guard case .notFound = error else { return XCTFail("Expected notFound, got \(error).") }
+    }
+  }
+
+  func testRepeatedOpenWriteAndExplicitCloseLoop() async throws {
+    let url = try makeCatalogURL()
+    for index in 0..<3 {
+      let store = try SQLiteCatalogStore(catalogURL: url)
+      let asset = try makeAsset(filename: "loop-\(index).jpg")
+      _ = try await store.upsertAsset(.init(asset: asset))
+      try await store.close()
+    }
+  }
+
   func testMissingRelinkAndListOrder() async throws {
     let store = try SQLiteCatalogStore(catalogURL: try makeCatalogURL())
     let first = try makeAsset(filename: "zeta.jpg", importDate: 20)
