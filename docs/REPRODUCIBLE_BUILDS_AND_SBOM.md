@@ -5,7 +5,7 @@
 The public pre-alpha CI builds an unsigned debug application and tests the
 native catalog, render, and early workflow code. The latest recorded public
 success is commit
-[`b4962decee30adafad895fa8095c1e918cabbd39`](https://github.com/immanuel-lam/PhotoSuite/actions/runs/32043696443)
+[`2a073619f0a35f1ce362f66f1683a1ccb1735fd0`](https://github.com/immanuel-lam/PhotoSuite/actions/runs/32047974543)
 on 18 August 2026. It proves that the unsigned-build and checked-in SBOM
 steps completed on a macOS 15 Arm64 runner. It does not prove release
 reproducibility, signing, notarization, or installed-artifact behaviour.
