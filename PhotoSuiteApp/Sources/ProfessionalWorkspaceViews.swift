@@ -741,7 +741,7 @@ extension ProfessionalCapabilityBlocker {
     case .cameraAdapterRequired:
       "Camera discovery is available. Tethered still capture needs a tested camera adapter."
     case .bookExportUnavailable:
-      "Book proof preview is available. Page layout and PDF book export are not implemented."
+      "PDF book export is available with the current page settings. Advanced templates and print-order services are not implemented."
     case .webPublishingUnavailable:
       "Local gallery proof is available. Hosting and publishing are not implemented."
     case .pluginHostUnavailable:

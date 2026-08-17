@@ -50,6 +50,7 @@ missing sources after fingerprint validation, apply basic and
 baseline Develop groups, author local mask graphs, crop with an interactive canvas
 and rotate, compare before
 and after, inspect the histogram and three-way colour grade, author versioned masks,
+import an attribution-preserving Lensfun profile and apply its bounded optics mapping,
 edit catalog metadata, import and write the supported XMP sidecar fields, use
 validated manual clone, healing, and red-eye controls, and write JPEG, PNG, HEIF,
 or TIFF output through Deliver.
