@@ -32,13 +32,27 @@ public enum RetouchResultGate {
 ///
 /// Clone copies a translated source patch through a pressure-aware brush mask.
 /// Healing uses the same source patch with a bounded Gaussian softening before
-/// blending. Neither operation writes to the original source image. Red-eye is
-/// intentionally kept as a typed recipe operation but is rejected by the
-/// compiler until a colour-aware implementation passes its quality gates.
+/// blending. Red-eye applies a bounded red-dominance correction through a
+/// marked brush. None of these operations writes to the original source image.
 enum RetouchRenderer {
   private static let brushComponentID = UUID(
     uuidString: "8F80A5D7-CCAC-4F56-A11C-7F19B6D9F0D5"
   )!
+
+  private static let redEyeKernel = CIColorKernel(
+    source: """
+      kernel vec4 correctRedEye(sampler image, sampler coverage) {
+        vec4 pixel = sample(image, samplerCoord(image));
+        vec4 mask = sample(coverage, samplerCoord(coverage));
+        float nonRed = max(pixel.g, pixel.b);
+        float dominance = pixel.r - nonRed;
+        float redSignal = smoothstep(0.08, 0.32, dominance);
+        float correction = clamp(mask.r * redSignal, 0.0, 1.0);
+        float correctedRed = mix(pixel.r, nonRed, correction);
+        return vec4(correctedRed, pixel.g, pixel.b, pixel.a);
+      }
+      """
+  )
 
   static func applyClone(
     _ image: CIImage,
@@ -102,6 +116,37 @@ enum RetouchRenderer {
       mask: mask,
       index: index
     )
+  }
+
+  static func applyRedEye(
+    _ image: CIImage,
+    adjustment: RedEyeAdjustmentV1,
+    index: Int
+  ) throws -> CIImage {
+    guard
+      let sample = RetouchBrushSampleV1(
+        point: adjustment.center,
+        pressure: 1
+      ),
+      let brush = RetouchBrushV1(
+        samples: [sample],
+        radius: adjustment.radius,
+        feather: adjustment.feather,
+        flow: 1
+      )
+    else {
+      throw RenderCoreError.invalidOperationValue(index: index, operation: "redEye")
+    }
+    let brushCoverage = try brushMask(image, brush: brush, index: index)
+    guard
+      let output = redEyeKernel?.apply(
+        extent: image.extent,
+        arguments: [image, brushCoverage]
+      )
+    else {
+      throw RenderCoreError.invalidOperationValue(index: index, operation: "redEye")
+    }
+    return output.cropped(to: image.extent)
   }
 
   private static func translatedPatch(

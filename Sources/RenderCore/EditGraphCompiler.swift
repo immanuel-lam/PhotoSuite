@@ -153,8 +153,8 @@ enum EditGraphCompiler {
       case .healing(let adjustment):
         image = try RetouchRenderer.applyHealing(image, adjustment: adjustment, index: index)
 
-      case .redEye:
-        throw RenderCoreError.unsupportedOperation(index: index, kind: "redEye")
+      case .redEye(let adjustment):
+        image = try RetouchRenderer.applyRedEye(image, adjustment: adjustment, index: index)
 
       case .normalizedCrop(let crop):
         image = try cropImage(image, crop: crop, index: index)

@@ -166,8 +166,8 @@ public struct HealingAdjustmentV1: Codable, Hashable, Sendable {
 }
 
 /// A typed red-eye payload. The payload is durable and forward compatible;
-/// version one keeps the render operation explicitly unsupported until a
-/// colour-aware algorithm passes the release quality gates.
+/// version one applies a bounded local red-dominance correction at the marked
+/// eye position. It does not attempt face detection or automatic eye finding.
 public struct RedEyeAdjustmentV1: Codable, Hashable, Sendable {
   public let schemaVersion: UInt
   public let center: RetouchPointV1

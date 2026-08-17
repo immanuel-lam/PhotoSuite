@@ -119,28 +119,101 @@ final class RetouchRenderTests: XCTestCase {
     )
   }
 
-  func testRedEyePayloadIsTypedButRenderReportsUnsupportedOperation() async throws {
-    let fixture = try makeFixture()
+  func testRedEyeCorrectionReducesLocalizedRedDominanceWithoutChangingOtherPixels() async throws {
+    let fixture = try makeRedEyeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let sourceChecksum = try DeterministicImageFixture.checksum(of: fixture.source)
     let redEye = try XCTUnwrap(
       RedEyeAdjustmentV1(
         center: try XCTUnwrap(RetouchPointV1(x: 0.5, y: 0.5)),
-        radius: 0.08,
+        radius: 0.24,
         feather: 0.25
       )
     )
     let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
+    let baseline = try await decoder.preview(
+      sourceURL: fixture.source,
+      recipe: makeRecipe(),
+      maximumPixelDimension: nil
+    )
+    let corrected = try await decoder.preview(
+      sourceURL: fixture.source,
+      recipe: makeRecipe(operations: [.redEye(redEye)]),
+      maximumPixelDimension: nil
+    )
+    let baselineData = try DeterministicImageFixture.rgba8Data(from: baseline)
+    let correctedData = try DeterministicImageFixture.rgba8Data(from: corrected)
+    let baselineCentre = DeterministicImageFixture.pixel(
+      x: 4,
+      y: 3,
+      width: baseline.width,
+      in: baselineData
+    )
+    let correctedCentre = DeterministicImageFixture.pixel(
+      x: 4,
+      y: 3,
+      width: corrected.width,
+      in: correctedData
+    )
+    let baselineCorner = DeterministicImageFixture.pixel(
+      x: 0,
+      y: 0,
+      width: baseline.width,
+      in: baselineData
+    )
+    let correctedCorner = DeterministicImageFixture.pixel(
+      x: 0,
+      y: 0,
+      width: corrected.width,
+      in: correctedData
+    )
+    XCTAssertLessThan(correctedCentre.red, baselineCentre.red)
+    let baselineRedDominance =
+      Int(baselineCentre.red)
+      - Int(max(baselineCentre.green, baselineCentre.blue))
+    let correctedRedDominance =
+      Int(correctedCentre.red)
+      - Int(max(correctedCentre.green, correctedCentre.blue))
+    XCTAssertLessThan(correctedRedDominance, baselineRedDominance)
+    XCTAssertLessThanOrEqual(correctedRedDominance, 12)
+    XCTAssertEqual(correctedCentre.alpha, baselineCentre.alpha)
+    XCTAssertEqual(correctedCorner.red, baselineCorner.red, accuracy: 2)
+    XCTAssertEqual(correctedCorner.green, baselineCorner.green, accuracy: 2)
+    XCTAssertEqual(correctedCorner.blue, baselineCorner.blue, accuracy: 2)
+    XCTAssertEqual(sourceChecksum, try DeterministicImageFixture.checksum(of: fixture.source))
+  }
 
-    do {
-      _ = try await decoder.preview(
-        sourceURL: fixture.source,
-        recipe: makeRecipe(operations: [.redEye(redEye)]),
-        maximumPixelDimension: nil
+  func testRedEyeCorrectionIsDeterministicAndLeavesNeutralPixelsUnchanged() async throws {
+    let fixture = try makeRedEyeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let redEye = try XCTUnwrap(
+      RedEyeAdjustmentV1(
+        center: try XCTUnwrap(RetouchPointV1(x: 0.5, y: 0.5)),
+        radius: 0.24,
+        feather: 0.25
       )
-      XCTFail("Red-eye must remain explicitly unsupported until its algorithm is verified.")
-    } catch let error as RenderCoreError {
-      XCTAssertEqual(error, .unsupportedOperation(index: 0, kind: "redEye"))
-    }
+    )
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
+    let recipe = makeRecipe(operations: [.redEye(redEye)])
+    let first = try await decoder.preview(
+      sourceURL: fixture.source,
+      recipe: recipe,
+      maximumPixelDimension: nil
+    )
+    let second = try await decoder.preview(
+      sourceURL: fixture.source,
+      recipe: recipe,
+      maximumPixelDimension: nil
+    )
+    let firstData = try DeterministicImageFixture.rgba8Data(from: first)
+    let secondData = try DeterministicImageFixture.rgba8Data(from: second)
+
+    XCTAssertEqual(firstData, secondData)
+    XCTAssertEqual(
+      DeterministicImageFixture.pixel(x: 1, y: 1, width: first.width, in: firstData).red,
+      80,
+      accuracy: 2
+    )
   }
 
   func testRetouchResultGateRejectsStaleRevision() {
@@ -166,7 +239,14 @@ final class RetouchRenderTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
     let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
     let sourceURL = fixture.source
-    let recipe = makeRecipe()
+    let redEye = try XCTUnwrap(
+      RedEyeAdjustmentV1(
+        center: try XCTUnwrap(RetouchPointV1(x: 0.5, y: 0.5)),
+        radius: 0.24,
+        feather: 0.25
+      )
+    )
+    let recipe = makeRecipe(operations: [.redEye(redEye)])
     let task = Task {
       try await decoder.preview(
         sourceURL: sourceURL,
@@ -211,6 +291,25 @@ final class RetouchRenderTests: XCTestCase {
           return [30, 70, 210, 255]
         }
         return [220, 40, 20, 255]
+      }
+    }
+    let source = try DeterministicImageFixture.makePNG(
+      in: directory,
+      width: 8,
+      height: 6,
+      pixels: pixels
+    )
+    return (directory, source)
+  }
+
+  private func makeRedEyeFixture() throws -> (directory: URL, source: URL) {
+    let directory = try DeterministicImageFixture.makeDirectory()
+    let pixels = (0..<6).flatMap { y in
+      (0..<8).flatMap { x -> [UInt8] in
+        if x == 4 && y == 3 {
+          return [220, 20, 20, 255]
+        }
+        return [80, 80, 80, 255]
       }
     }
     let source = try DeterministicImageFixture.makePNG(
