@@ -43,8 +43,9 @@ contains these tested components:
 - a catalog metadata inspector, MapKit GPS markers, AVFoundation device
   discovery, and native print routing.
 
-The interface can import local sources, browse a catalog, apply basic and
-baseline Develop groups, crop and rotate, compare before and after, inspect
+The interface can review local import selections with duplicate states, browse a
+catalog, apply basic and baseline Develop groups, crop and rotate, compare before
+and after, inspect
 the histogram and three-way colour grade, author versioned masks, edit
 catalog metadata, and write JPEG, PNG, HEIF, or TIFF output through Deliver.
 Durable regular and smart collections plus photo stacks load from the catalog and

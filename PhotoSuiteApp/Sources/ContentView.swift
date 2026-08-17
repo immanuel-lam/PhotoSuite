@@ -13,6 +13,7 @@ struct ContentView: View {
   @Bindable var workspace: PhotoWorkspace
   @AppStorage("jpegQuality") private var jpegQuality = 0.9
   @State private var inspectorPresented = false
+  @State private var importReview: LibraryImportReview?
   private let sidebarWidth: CGFloat = 300
 
   var body: some View {
@@ -45,10 +46,27 @@ struct ContentView: View {
       allowsMultipleSelection: true
     ) { result in
       switch result {
-      case .success(let urls): Task { await workspace.importURLs(urls) }
+      case .success(let urls):
+        importReview = makeImportReview(for: urls)
       case .failure(let error): workspace.errorMessage = error.localizedDescription
       }
     } onCancellation: {
+    }
+    .sheet(item: $importReview) { review in
+      LibraryImportReviewView(
+        review: review,
+        onImport: { mediaItems in
+          let urls = mediaItems.compactMap(\.fileURL)
+          guard !urls.isEmpty else {
+            workspace.errorMessage = "The selected import items have no readable file URL."
+            return
+          }
+          Task { @MainActor in
+            await workspace.importURLs(urls)
+          }
+        },
+        onCancel: {}
+      )
     }
     .onChange(of: workspace.section, initial: true) { _, section in
       inspectorPresented = section == .develop
@@ -118,6 +136,31 @@ struct ContentView: View {
       }
     }
   }
+
+  private func makeImportReview(for urls: [URL]) -> LibraryImportReview {
+    let deviceID = CaptureDeviceID(rawValue: "local-import")
+    let mediaItems = urls.enumerated().map { index, url in
+      let standardizedURL = url.standardizedFileURL
+      return CaptureMediaItem(
+        id: "local:\(index):\(standardizedURL.path)",
+        deviceID: deviceID,
+        filename: standardizedURL.lastPathComponent,
+        typeIdentifier: UTType(filenameExtension: standardizedURL.pathExtension)?.identifier,
+        fileURL: standardizedURL,
+        isRaw: Self.rawExtensions.contains(standardizedURL.pathExtension.lowercased()),
+        creationDate: nil
+      )
+    }
+    return LibraryImportReview(
+      deviceID: deviceID,
+      mediaItems: mediaItems,
+      existingAssets: workspace.assets
+    )
+  }
+
+  private static let rawExtensions: Set<String> = [
+    "arw", "cr2", "cr3", "dng", "raf", "rw2", "nef", "orf", "raw",
+  ]
 }
 
 extension DeliverFormat {
