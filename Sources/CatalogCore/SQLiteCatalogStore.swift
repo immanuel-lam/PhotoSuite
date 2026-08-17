@@ -274,6 +274,8 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
 
     let pattern = "%\(escapeLike(query))%"
     if ftsAvailable, query.allSatisfy({ $0.isLetter || $0.isNumber }) {
+      // FTS5 tokenization can fold Unicode differently. LIKE remains the authoritative
+      // predicate so that the indexed and fallback paths return the same result set.
       return CatalogAssetSearchResult(
         assets: try assets(
           sql: """
@@ -281,12 +283,19 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
               assets.fingerprint_json, assets.import_ms, assets.capture_ms,
               assets.dimensions_json, assets.rating, assets.color_label, assets.is_missing
             FROM assets
-            WHERE assets.id IN (
-                SELECT asset_id FROM asset_search WHERE asset_search MATCH ?
+            WHERE (
+                assets.id IN (
+                  SELECT asset_id FROM asset_search WHERE asset_search MATCH ?
+                )
+                OR assets.filename LIKE ? ESCAPE '\\'
+                OR COALESCE(assets.type_identifier, '') LIKE ? ESCAPE '\\'
+                OR assets.source_url LIKE ? ESCAPE '\\'
               )
-              OR assets.filename LIKE ? ESCAPE '\\'
-              OR COALESCE(assets.type_identifier, '') LIKE ? ESCAPE '\\'
-              OR assets.source_url LIKE ? ESCAPE '\\'
+              AND (
+                assets.filename LIKE ? ESCAPE '\\'
+                OR COALESCE(assets.type_identifier, '') LIKE ? ESCAPE '\\'
+                OR assets.source_url LIKE ? ESCAPE '\\'
+              )
             ORDER BY assets.import_ms DESC, assets.id ASC
             LIMIT ?;
             """,
@@ -296,7 +305,10 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
             try bind(pattern, to: statement, index: 2, operation: "asset.search.fts")
             try bind(pattern, to: statement, index: 3, operation: "asset.search.fts")
             try bind(pattern, to: statement, index: 4, operation: "asset.search.fts")
-            try bind(limit, to: statement, index: 5, operation: "asset.search.fts")
+            try bind(pattern, to: statement, index: 5, operation: "asset.search.fts")
+            try bind(pattern, to: statement, index: 6, operation: "asset.search.fts")
+            try bind(pattern, to: statement, index: 7, operation: "asset.search.fts")
+            try bind(limit, to: statement, index: 8, operation: "asset.search.fts")
           }
         )
       )
@@ -1547,16 +1559,17 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
 
     let ftsAvailable: Bool
     if shouldUseFTS {
-      ftsAvailable = try tableExists(database, name: "asset_search")
-      if ftsAvailable {
-        try validateSchemaSQL(
-          database,
-          object: "asset_search",
-          type: "table",
-          expectedSQL:
-            "CREATE VIRTUAL TABLE asset_search USING fts5(asset_id UNINDEXED, filename, type_identifier, source_url)"
-        )
+      guard try tableExists(database, name: "asset_search") else {
+        throw schemaError("The required FTS5 table 'asset_search' is missing.")
       }
+      try validateSchemaSQL(
+        database,
+        object: "asset_search",
+        type: "table",
+        expectedSQL:
+          "CREATE VIRTUAL TABLE asset_search USING fts5(asset_id UNINDEXED, filename, type_identifier, source_url)"
+      )
+      ftsAvailable = true
     } else {
       ftsAvailable = false
     }

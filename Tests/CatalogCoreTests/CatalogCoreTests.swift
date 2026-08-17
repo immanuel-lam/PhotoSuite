@@ -109,6 +109,25 @@ final class CatalogCoreTests: XCTestCase {
     XCTAssertEqual(ftsIDs, fallbackIDs)
   }
 
+  func testForcedFTSAndFallbackSearchHaveEquivalentDiacriticResults() async throws {
+    let ftsStore = try SQLiteCatalogStore(
+      catalogURL: try makeCatalogURL(), ftsAvailabilityOverride: true)
+    let fallbackStore = try SQLiteCatalogStore(
+      catalogURL: try makeCatalogURL(), ftsAvailabilityOverride: false)
+    let accented = try makeAsset(filename: "café.CR3", importDate: 20)
+    let plain = try makeAsset(filename: "cafe.CR3", importDate: 10)
+    for asset in [accented, plain] {
+      _ = try await ftsStore.upsertAsset(.init(asset: asset))
+      _ = try await fallbackStore.upsertAsset(.init(asset: asset))
+    }
+
+    let accentedFTSIDs = try await ftsStore.searchAssets(.init(query: "café")).assets.map(\.id)
+    let accentedFallbackIDs = try await fallbackStore.searchAssets(.init(query: "café")).assets.map(
+      \.id)
+    XCTAssertEqual(accentedFTSIDs, [accented.id])
+    XCTAssertEqual(accentedFTSIDs, accentedFallbackIDs)
+  }
+
   func testSearchMatchesFilenameTypeAndSourceURLWithQuotesAndBackslashes() async throws {
     let store = try SQLiteCatalogStore(
       catalogURL: try makeCatalogURL(), ftsAvailabilityOverride: false)
@@ -476,6 +495,11 @@ final class CatalogCoreTests: XCTestCase {
         """
     try assertVersionOneSchemaRejected(
       schema, name: "ordinary search table", ftsAvailabilityOverride: true)
+  }
+
+  func testVersionOneSchemaRequiresFTS5SearchTableWhenConfigured() throws {
+    try assertVersionOneSchemaRejected(
+      versionOneSchema, name: "missing FTS5 search table", ftsAvailabilityOverride: true)
   }
 
   func testReadOnlyCatalogAndDuplicateJobConstraintReturnTypedSQLiteErrors() async throws {
