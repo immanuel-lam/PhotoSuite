@@ -372,14 +372,21 @@ public final class PhotoWorkspace {
     return []
   }
 
-  public func exportBook(to destinationURL: URL, title: String = "PhotoSuite Book") async {
+  public func exportBook(
+    to destinationURL: URL,
+    title: String = "PhotoSuite Book",
+    author: String? = nil,
+    pageSize: PhotoBookPageSize = .a4
+  ) async {
     await exportProfessionalOutput(operation: "book", assets: professionalOutputAssets) {
       let photos = try await self.professionalOutputPhotos()
       return try await PDFBookExporter(renderer: self.renderer).export(
         PhotoBookExportRequest(
           title: title,
+          author: author,
           pages: photos,
-          destinationURL: destinationURL
+          destinationURL: destinationURL,
+          pageSize: pageSize
         )
       )
     }
@@ -387,7 +394,10 @@ public final class PhotoWorkspace {
 
   public func exportSlideshow(
     to destinationURL: URL,
-    title: String = "PhotoSuite Slideshow"
+    title: String = "PhotoSuite Slideshow",
+    secondsPerSlide: Double = 4,
+    framesPerSecond: Int = 30,
+    canvas: PhotoSlideshowCanvas = PhotoSlideshowCanvas()
   ) async {
     await exportProfessionalOutput(operation: "slideshow", assets: professionalOutputAssets) {
       let photos = try await self.professionalOutputPhotos()
@@ -395,7 +405,10 @@ public final class PhotoWorkspace {
         PhotoSlideshowExportRequest(
           title: title,
           slides: photos,
-          destinationURL: destinationURL
+          destinationURL: destinationURL,
+          secondsPerSlide: secondsPerSlide,
+          framesPerSecond: framesPerSecond,
+          canvas: canvas
         )
       )
     }
@@ -403,15 +416,19 @@ public final class PhotoWorkspace {
 
   public func exportWebGallery(
     to destinationURL: URL,
-    title: String = "PhotoSuite Gallery"
+    title: String = "PhotoSuite Gallery",
+    subtitle: String? = nil,
+    maximumPixelDimension: Int? = 2_400
   ) async {
     await exportProfessionalOutput(operation: "web gallery", assets: professionalOutputAssets) {
       let photos = try await self.professionalOutputPhotos()
       return try await StaticHTMLGalleryExporter(renderer: self.renderer).export(
         PhotoGalleryExportRequest(
           title: title,
+          subtitle: subtitle,
           items: photos,
-          destinationURL: destinationURL
+          destinationURL: destinationURL,
+          maximumPixelDimension: maximumPixelDimension
         )
       )
     }

@@ -350,6 +350,16 @@ private struct ProfessionalOutputToolView: View {
   let tool: ProfessionalTool
   let description: String
 
+  @State private var draft: ProfessionalOutputDraft
+  @State private var exportTask: Task<Void, Never>?
+
+  init(workspace: PhotoWorkspace, tool: ProfessionalTool, description: String) {
+    self.workspace = workspace
+    self.tool = tool
+    self.description = description
+    _draft = State(initialValue: ProfessionalOutputDraft(tool: tool))
+  }
+
   var body: some View {
     ProfessionalStatusSurface(tool: tool, status: workspace.professionalStatus(for: tool)) {
       Text(description)
@@ -357,22 +367,133 @@ private struct ProfessionalOutputToolView: View {
         .frame(maxWidth: 700, alignment: .leading)
       PhotoProofPreview(preview: workspace.preview)
         .frame(maxWidth: 700, minHeight: 360, maxHeight: 520)
-      HStack(spacing: 12) {
-        Button(actionTitle) { presentSavePanel() }
-          .buttonStyle(.borderedProminent)
-          .disabled(
-            workspace.isProfessionalExporting
-              || workspace.professionalOutputAssets.isEmpty
-          )
-        if workspace.isProfessionalExporting {
-          ProgressView().controlSize(.small)
-        }
-      }
+      outputSettings
+      outputActions
       if let output = workspace.lastProfessionalOutput {
         Label("Published \(output.lastPathComponent)", systemImage: "checkmark.circle.fill")
           .font(.callout)
           .foregroundStyle(.green)
           .textSelection(.enabled)
+          .accessibilityIdentifier(ModernUIAccessibility.professionalOutputResult)
+      }
+      if let error = workspace.errorMessage, !error.isEmpty {
+        Label(error, systemImage: "exclamationmark.triangle.fill")
+          .font(.callout)
+          .foregroundStyle(.red)
+          .textSelection(.enabled)
+          .accessibilityIdentifier(ModernUIAccessibility.professionalOutputError)
+      }
+    }
+    .onDisappear { exportTask?.cancel() }
+  }
+
+  @ViewBuilder
+  private var outputSettings: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      Label("Output settings", systemImage: "slider.horizontal.3")
+        .font(.headline)
+
+      switch tool {
+      case .book:
+        TextField("Book title", text: $draft.title)
+          .textFieldStyle(.roundedBorder)
+          .accessibilityIdentifier(ModernUIAccessibility.professionalOutputTitle)
+        TextField("Author (optional)", text: $draft.author)
+          .textFieldStyle(.roundedBorder)
+          .accessibilityIdentifier(ModernUIAccessibility.professionalOutputAuthor)
+        Picker("Page size", selection: $draft.pageSize) {
+          ForEach(PhotoBookPageSize.allCases, id: \.self) { size in
+            Text(size.displayTitle).tag(size)
+          }
+        }
+        .pickerStyle(.menu)
+        .accessibilityIdentifier(ModernUIAccessibility.professionalOutputPageSize)
+      case .slideshow:
+        TextField("Slideshow title", text: $draft.title)
+          .textFieldStyle(.roundedBorder)
+          .accessibilityIdentifier(ModernUIAccessibility.professionalOutputTitle)
+        VStack(alignment: .leading, spacing: 8) {
+          HStack {
+            Text("Seconds per slide")
+            Spacer()
+            Text("\(draft.slideshowDuration, specifier: "%.1f") s")
+              .monospacedDigit()
+              .foregroundStyle(.secondary)
+          }
+          Slider(value: $draft.secondsPerSlide, in: 0.1...30, step: 0.1)
+            .accessibilityIdentifier(ModernUIAccessibility.professionalOutputDuration)
+        }
+        Picker("Frame rate", selection: $draft.framesPerSecond) {
+          ForEach([15, 24, 25, 30, 50, 60], id: \.self) { rate in
+            Text("\(rate) fps").tag(rate)
+          }
+        }
+        .pickerStyle(.menu)
+        .accessibilityIdentifier(ModernUIAccessibility.professionalOutputFrameRate)
+        HStack(spacing: 12) {
+          Stepper(value: $draft.canvasWidth, in: 320...16_384, step: 10) {
+            Text("Width \(draft.canvasWidth) px")
+              .monospacedDigit()
+          }
+          Stepper(value: $draft.canvasHeight, in: 180...16_384, step: 10) {
+            Text("Height \(draft.canvasHeight) px")
+              .monospacedDigit()
+          }
+        }
+        .accessibilityIdentifier(ModernUIAccessibility.professionalOutputCanvas)
+      case .webGallery:
+        TextField("Gallery title", text: $draft.title)
+          .textFieldStyle(.roundedBorder)
+          .accessibilityIdentifier(ModernUIAccessibility.professionalOutputTitle)
+        TextField("Subtitle (optional)", text: $draft.subtitle)
+          .textFieldStyle(.roundedBorder)
+          .accessibilityIdentifier(ModernUIAccessibility.professionalOutputSubtitle)
+        Toggle("Limit image size", isOn: $draft.galleryMaximumDimensionEnabled)
+        Stepper(value: $draft.galleryMaximumDimension, in: 256...32_768, step: 256) {
+          Text("Maximum \(draft.galleryMaximumDimension) px")
+            .monospacedDigit()
+        }
+        .disabled(!draft.galleryMaximumDimensionEnabled)
+        .accessibilityIdentifier(ModernUIAccessibility.professionalOutputMaximumDimension)
+      default:
+        EmptyView()
+      }
+    }
+    .frame(maxWidth: 700, alignment: .leading)
+    .padding(18)
+    .background(
+      Color(nsColor: .controlBackgroundColor).opacity(0.78),
+      in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+    )
+    .overlay {
+      RoundedRectangle(cornerRadius: 16, style: .continuous)
+        .stroke(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 0.5)
+    }
+    .accessibilityIdentifier(ModernUIAccessibility.professionalOutputSettings)
+  }
+
+  private var outputActions: some View {
+    HStack(spacing: 12) {
+      GlassControlGroup {
+        Button(actionTitle) { presentSavePanel() }
+          .modifier(GlassButtonWhenAvailable(prominent: true))
+          .disabled(
+            workspace.isProfessionalExporting
+              || workspace.professionalOutputAssets.isEmpty
+          )
+          .accessibilityIdentifier(ModernUIAccessibility.professionalOutputStart)
+        if workspace.isProfessionalExporting {
+          Button("Cancel") {
+            exportTask?.cancel()
+          }
+          .modifier(GlassButtonWhenAvailable())
+          .accessibilityIdentifier(ModernUIAccessibility.professionalOutputCancel)
+        }
+      }
+      if workspace.isProfessionalExporting {
+        ProgressView("Rendering and publishing…")
+          .controlSize(.small)
+          .accessibilityLabel("Rendering and publishing")
       }
     }
   }
@@ -408,17 +529,41 @@ private struct ProfessionalOutputToolView: View {
     }
     panel.begin { response in
       guard response == .OK, let destination = panel.url else { return }
-      Task { @MainActor in
-        switch tool {
-        case .book:
-          await workspace.exportBook(to: destination)
-        case .slideshow:
-          await workspace.exportSlideshow(to: destination)
-        case .webGallery:
-          await workspace.exportWebGallery(to: destination)
-        default:
-          break
-        }
+      beginExport(to: destination)
+    }
+  }
+
+  private func beginExport(to destination: URL) {
+    exportTask?.cancel()
+    let exportTool = tool
+    let exportDraft = draft
+    let exportWorkspace = workspace
+    exportTask = Task { @MainActor in
+      switch exportTool {
+      case .book:
+        await exportWorkspace.exportBook(
+          to: destination,
+          title: exportDraft.normalizedTitle,
+          author: exportDraft.normalizedAuthor,
+          pageSize: exportDraft.pageSize
+        )
+      case .slideshow:
+        await exportWorkspace.exportSlideshow(
+          to: destination,
+          title: exportDraft.normalizedTitle,
+          secondsPerSlide: exportDraft.slideshowDuration,
+          framesPerSecond: exportDraft.slideshowFrameRate,
+          canvas: exportDraft.slideshowCanvas
+        )
+      case .webGallery:
+        await exportWorkspace.exportWebGallery(
+          to: destination,
+          title: exportDraft.normalizedTitle,
+          subtitle: exportDraft.normalizedSubtitle,
+          maximumPixelDimension: exportDraft.galleryMaximumPixelDimension
+        )
+      default:
+        break
       }
     }
   }
@@ -545,6 +690,16 @@ extension ProfessionalTool {
     case .webGallery: "globe"
     case .plugins: "puzzlepiece.extension"
     case .adobeMigration: "arrow.trianglehead.2.clockwise.rotate.90"
+    }
+  }
+}
+
+extension PhotoBookPageSize {
+  fileprivate var displayTitle: String {
+    switch self {
+    case .a4: "A4"
+    case .letter: "US Letter"
+    case .square: "Square"
     }
   }
 }

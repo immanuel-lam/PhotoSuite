@@ -53,6 +53,19 @@ enum ModernUIAccessibility {
   static let deliverWatermarkToggle = "deliver-watermark-toggle"
   static let deliverSharpeningPicker = "deliver-sharpening-picker"
   static let deliverUnsupportedOptions = "deliver-unsupported-options"
+  static let professionalOutputSettings = "professional-output-settings"
+  static let professionalOutputTitle = "professional-output-title"
+  static let professionalOutputAuthor = "professional-output-author"
+  static let professionalOutputPageSize = "professional-output-page-size"
+  static let professionalOutputDuration = "professional-output-duration"
+  static let professionalOutputFrameRate = "professional-output-frame-rate"
+  static let professionalOutputCanvas = "professional-output-canvas"
+  static let professionalOutputSubtitle = "professional-output-subtitle"
+  static let professionalOutputMaximumDimension = "professional-output-maximum-dimension"
+  static let professionalOutputStart = "professional-output-start"
+  static let professionalOutputCancel = "professional-output-cancel"
+  static let professionalOutputError = "professional-output-error"
+  static let professionalOutputResult = "professional-output-result"
 }
 
 struct NavigationGlassSurface: ViewModifier {
