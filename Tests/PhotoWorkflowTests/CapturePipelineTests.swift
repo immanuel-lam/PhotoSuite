@@ -8,6 +8,15 @@ import XCTest
 @testable import PhotoWorkflow
 
 final class CapturePipelineTests: XCTestCase {
+  func testCaptureFixturesUseUniqueTemporaryRoots() throws {
+    let first = try CaptureFixture()
+    defer { first.remove() }
+    let second = try CaptureFixture()
+    defer { second.remove() }
+
+    XCTAssertNotEqual(first.root, second.root)
+  }
+
   func testWatchedFolderImportsStableFileAndPersistsRecipe() async throws {
     let fixture = try CaptureFixture()
     defer { fixture.remove() }
@@ -312,7 +321,7 @@ private final class CaptureFixture {
 
   init() throws {
     root = FileManager.default.temporaryDirectory
-      .appendingPathComponent("PhotoSuite-Capture-(UUID().uuidString)", isDirectory: true)
+      .appendingPathComponent("PhotoSuite-Capture-\(UUID().uuidString)", isDirectory: true)
     folder = root.appendingPathComponent("Watched", isDirectory: true)
     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
   }
