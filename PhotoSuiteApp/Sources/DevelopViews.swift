@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import AppKit
+import PhotoDomain
 import PhotoWorkflow
 import SwiftUI
 
@@ -119,6 +120,7 @@ private struct TransientCanvasControls: View {
 struct DevelopInspector: View {
   @Bindable var workspace: PhotoWorkspace
   @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
+  @State private var draftColorGrade = ThreeWayColorGrade.neutral
 
   var body: some View {
     ScrollView {
@@ -134,6 +136,17 @@ struct DevelopInspector: View {
         AdjustmentRow(workspace: workspace, kind: .highlights, title: "Highlights", range: -1...1)
         AdjustmentRow(workspace: workspace, kind: .shadows, title: "Shadows", range: -1...1)
         AdjustmentRow(workspace: workspace, kind: .saturation, title: "Saturation", range: -1...1)
+
+        Divider()
+        HistogramView(histogram: workspace.preview?.histogram)
+
+        Divider()
+        ColorGradeView(
+          grade: $draftColorGrade,
+          onCommit: { grade in
+            Task { await workspace.commitColorGrade(grade) }
+          }
+        )
 
         Divider()
         Text("Geometry").font(.headline)
@@ -159,6 +172,12 @@ struct DevelopInspector: View {
       }
       .padding(18)
       .disabled(workspace.selectedAsset == nil)
+    }
+    .task(id: workspace.selectedAssetID) {
+      draftColorGrade = workspace.currentColorGrade
+    }
+    .onChange(of: workspace.currentRecipe?.revision) { _, _ in
+      draftColorGrade = workspace.currentColorGrade
     }
     .background(Color(nsColor: .controlBackgroundColor))
     .accessibilityIdentifier(ModernUIAccessibility.precisionControlsSurface)

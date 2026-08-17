@@ -36,6 +36,16 @@ public final class PhotoWorkspace {
     return assets.first { $0.id == selectedAssetID }
   }
 
+  /// The latest persisted three-way grade, or the neutral grade when the
+  /// current recipe does not contain one. The UI uses this value as its
+  /// starting point; edits are committed through `commitColorGrade(_:)`.
+  public var currentColorGrade: ThreeWayColorGrade {
+    for operation in currentRecipe?.operations.reversed() ?? [] {
+      if case .threeWayColorGrade(let grade) = operation { return grade }
+    }
+    return .neutral
+  }
+
   public var filteredAssets: [PhotoAsset] {
     guard !searchText.isEmpty else { return assets }
     return assets.filter { $0.filename.localizedCaseInsensitiveContains(searchText) }
