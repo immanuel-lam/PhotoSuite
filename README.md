@@ -17,6 +17,8 @@ contains these tested components:
   bookmarks, backups, reopen tests, and local source-state recovery;
 - a Core Image and Metal render core with common-image decoding and
   Apple-supported RAW decoding when `CIRAWFilter` accepts the source;
+- a bounded DNG 1.7.1 metadata reader and atomic writer for existing fixed-size
+  camera and software tags, with raw-payload preservation;
 - bounded previews, a 256-bin RGB and luminance histogram, and recovery
   for legacy empty RAW decoder pins;
 - durable ordered recipes for basic Develop controls, baseline tone,
@@ -56,7 +58,8 @@ A common-image preview fallback is available when a source is not accepted
 as RAW; this is not a supported-camera list. A licensed real RAW fixture is
 absent, so the real RAW fixture test is skipped.
 
-The project has no Lightroom parity claim. Physical tethered transfer,
+The project has no Lightroom parity claim. Bayer/X-Trans raw-pixel decoding,
+LibRaw fallback, and complete DNG encoding remain incomplete. Physical tethered transfer,
 vendor camera SDK adapters, print templates and soft proofing, hosted
 publishing, plug-in hosting, Adobe migration, AI features beyond the
 verified Vision subset, healing, and production support for the full range of
