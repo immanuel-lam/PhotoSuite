@@ -8,7 +8,11 @@ test:
 	swift test
 
 generate:
-	/opt/homebrew/bin/xcodegen generate
+	@command -v xcodegen >/dev/null 2>&1 || { \
+		echo "error: xcodegen is required and must be available on PATH." >&2; \
+		exit 127; \
+	}
+	xcodegen generate
 
 build: generate
 	xcodebuild -project PhotoSuite.xcodeproj -scheme PhotoSuite -configuration Debug -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/XcodeDerivedData CODE_SIGNING_ALLOWED=NO ARCHS=arm64 ONLY_ACTIVE_ARCH=YES build
