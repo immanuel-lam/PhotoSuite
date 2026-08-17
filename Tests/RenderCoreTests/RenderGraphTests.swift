@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import CoreGraphics
+import CoreImage
 import Foundation
 import PhotoDomain
 import XCTest
@@ -138,6 +139,55 @@ final class RenderGraphTests: XCTestCase {
     XCTAssertEqual(half.height, 6)
   }
 
+  func testThreeQuarterTurnUsesExactDimensions() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let decoder = try AppleRawDecoder()
+
+    let image = try await decoder.preview(
+      sourceURL: fixture.source,
+      recipe: makeRecipe(operations: [.rotationDegrees(270)]),
+      maximumPixelDimension: nil
+    )
+
+    XCTAssertEqual([image.width, image.height], [6, 8])
+  }
+
+  func testArbitraryRotationUsesFullIntegralBoundingBox() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let decoder = try AppleRawDecoder()
+
+    let image = try await decoder.preview(
+      sourceURL: fixture.source,
+      recipe: makeRecipe(operations: [.rotationDegrees(45)]),
+      maximumPixelDimension: nil
+    )
+
+    XCTAssertEqual([image.width, image.height], [10, 10])
+  }
+
+  func testNearQuarterTurnUsesArbitraryRotationPath() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let decoder = try AppleRawDecoder()
+
+    let recipe = makeRecipe(operations: [.rotationDegrees(90.000_000_05)])
+    let sourceImage = try XCTUnwrap(
+      CIImage(contentsOf: fixture.source, options: [.applyOrientationProperty: true])
+    )
+    let compiled = try EditGraphCompiler.compile(sourceImage, recipe: recipe)
+    XCTAssertEqual([Int(compiled.extent.width), Int(compiled.extent.height)], [8, 10])
+
+    let image = try await decoder.preview(
+      sourceURL: fixture.source,
+      recipe: recipe,
+      maximumPixelDimension: nil
+    )
+
+    XCTAssertEqual([image.width, image.height], [8, 10])
+  }
+
   func testRecipeOrderChangesGeometry() async throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
@@ -157,6 +207,30 @@ final class RenderGraphTests: XCTestCase {
 
     XCTAssertEqual([cropThenRotate.width, cropThenRotate.height], [6, 4])
     XCTAssertEqual([rotateThenCrop.width, rotateThenCrop.height], [3, 8])
+  }
+
+  func testRecipeOrderChangesRenderedPixelsAtEqualDimensions() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let decoder = try AppleRawDecoder()
+
+    let exposureThenHighlights = try await decoder.preview(
+      sourceURL: fixture.source,
+      recipe: makeRecipe(operations: [.exposureEV(0.5), .highlights(0.75)]),
+      maximumPixelDimension: nil
+    )
+    let highlightsThenExposure = try await decoder.preview(
+      sourceURL: fixture.source,
+      recipe: makeRecipe(operations: [.highlights(0.75), .exposureEV(0.5)]),
+      maximumPixelDimension: nil
+    )
+
+    XCTAssertEqual(exposureThenHighlights.width, highlightsThenExposure.width)
+    XCTAssertEqual(exposureThenHighlights.height, highlightsThenExposure.height)
+    XCTAssertNotEqual(
+      try DeterministicImageFixture.rgba8Data(from: exposureThenHighlights),
+      try DeterministicImageFixture.rgba8Data(from: highlightsThenExposure)
+    )
   }
 
   func testUnknownOperationReturnsIndexedTypedError() async throws {
@@ -195,6 +269,23 @@ final class RenderGraphTests: XCTestCase {
     }
   }
 
+  func testExposureThatOverflowsFloatReturnsIndexedTypedError() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let decoder = try AppleRawDecoder()
+
+    do {
+      _ = try await decoder.preview(
+        sourceURL: fixture.source,
+        recipe: makeRecipe(operations: [.exposureEV(Double.greatestFiniteMagnitude)]),
+        maximumPixelDimension: nil
+      )
+      XCTFail("Expected invalid exposure value")
+    } catch let error as RenderCoreError {
+      XCTAssertEqual(error, .invalidOperationValue(index: 0, operation: "exposureEV"))
+    }
+  }
+
   func testUnsupportedRenderSchemaVersionReturnsTypedError() async throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
@@ -202,7 +293,7 @@ final class RenderGraphTests: XCTestCase {
     let recipe = EditRecipe(
       assetID: UUID(),
       pins: EnginePins(
-        decoderIdentifier: "com.apple.coreimage",
+        decoderIdentifier: "com.apple.coreimage.common-image",
         decoderVersion: "system-default",
         renderSchemaVersion: 2,
         cameraProfileVersion: nil,
@@ -231,7 +322,7 @@ final class RenderGraphTests: XCTestCase {
     EditRecipe(
       assetID: UUID(uuidString: "00000000-0000-0000-0000-000000000005")!,
       pins: EnginePins(
-        decoderIdentifier: "com.apple.coreimage",
+        decoderIdentifier: "com.apple.coreimage.common-image",
         decoderVersion: "system-default",
         renderSchemaVersion: 1,
         cameraProfileVersion: nil,

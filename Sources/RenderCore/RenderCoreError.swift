@@ -10,6 +10,8 @@ public enum RenderCoreError: Error, Equatable, Sendable {
   case unreadableSource(URL)
   case unsupportedSource(URL)
   case corruptSource(URL)
+  case decoderIdentifierMismatch(expected: String, actual: String)
+  case decoderVersionMismatch(expected: String, actual: String)
   case unsupportedDecoderVersion(String)
   case unsupportedRenderSchemaVersion(UInt)
   case invalidMaximumPixelDimension(Int)

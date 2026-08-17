@@ -41,6 +41,21 @@ final class PreviewTests: XCTestCase {
     XCTAssertEqual(image.height, 6)
   }
 
+  func testPreviewDoesNotChangeSourceChecksum() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let checksum = try DeterministicImageFixture.checksum(of: fixture.source)
+    let decoder = try AppleRawDecoder()
+
+    _ = try await decoder.preview(
+      sourceURL: fixture.source,
+      recipe: makeRecipe(operations: [.exposureEV(0.5), .rotationDegrees(45)]),
+      maximumPixelDimension: 4
+    )
+
+    XCTAssertEqual(try DeterministicImageFixture.checksum(of: fixture.source), checksum)
+  }
+
   func testPreviewScalesTheEditedGraph() async throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
@@ -76,6 +91,72 @@ final class PreviewTests: XCTestCase {
     }
   }
 
+  func testPreviewRejectsCommonImageDecoderVersionMismatch() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let decoder = try AppleRawDecoder()
+    let recipe = EditRecipe(
+      assetID: UUID(),
+      pins: EnginePins(
+        decoderIdentifier: "com.apple.coreimage.common-image",
+        decoderVersion: "future-common-decoder",
+        renderSchemaVersion: 1,
+        cameraProfileVersion: nil,
+        modelVersions: [:]
+      )
+    )
+
+    do {
+      _ = try await decoder.preview(
+        sourceURL: fixture.source,
+        recipe: recipe,
+        maximumPixelDimension: nil
+      )
+      XCTFail("Expected decoder version mismatch")
+    } catch let error as RenderCoreError {
+      XCTAssertEqual(
+        error,
+        .decoderVersionMismatch(
+          expected: "future-common-decoder",
+          actual: "system-default"
+        )
+      )
+    }
+  }
+
+  func testPreviewRejectsDecoderIdentifierMismatch() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let decoder = try AppleRawDecoder()
+    let recipe = EditRecipe(
+      assetID: UUID(),
+      pins: EnginePins(
+        decoderIdentifier: "com.example.future-decoder",
+        decoderVersion: "system-default",
+        renderSchemaVersion: 1,
+        cameraProfileVersion: nil,
+        modelVersions: [:]
+      )
+    )
+
+    do {
+      _ = try await decoder.preview(
+        sourceURL: fixture.source,
+        recipe: recipe,
+        maximumPixelDimension: nil
+      )
+      XCTFail("Expected decoder identifier mismatch")
+    } catch let error as RenderCoreError {
+      XCTAssertEqual(
+        error,
+        .decoderIdentifierMismatch(
+          expected: "com.example.future-decoder",
+          actual: "com.apple.coreimage.common-image"
+        )
+      )
+    }
+  }
+
   func testRenderEngineProtocolReturnsBoundedPNGTransport() async throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
@@ -107,7 +188,7 @@ final class PreviewTests: XCTestCase {
     EditRecipe(
       assetID: UUID(uuidString: "00000000-0000-0000-0000-000000000006")!,
       pins: EnginePins(
-        decoderIdentifier: "com.apple.coreimage",
+        decoderIdentifier: "com.apple.coreimage.common-image",
         decoderVersion: "system-default",
         renderSchemaVersion: 1,
         cameraProfileVersion: nil,

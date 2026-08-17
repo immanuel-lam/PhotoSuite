@@ -105,6 +105,44 @@ final class JPEGExportTests: XCTestCase {
     XCTAssertFalse(siblings.contains { $0.lastPathComponent.contains(".photosuite-tmp-") })
   }
 
+  func testCancellationImmediatelyBeforePublicationKeepsOldDestination() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let destination = fixture.directory.appendingPathComponent("cancelled.jpg")
+    let oldDestination = Data("old destination must survive cancellation".utf8)
+    try oldDestination.write(to: destination)
+    let gate = SuspendedPublicationGate()
+    let exporter = AtomicJPEGExporter(
+      decoder: try AppleRawDecoder(),
+      publisher: SystemAtomicFilePublisher(),
+      publicationGate: gate
+    )
+    let request = makeRequest(source: fixture.source, destination: destination)
+
+    let exportTask = Task {
+      try await exporter.export(request)
+    }
+    await gate.waitUntilEntered()
+    exportTask.cancel()
+    await gate.release()
+
+    do {
+      _ = try await exportTask.value
+      XCTFail("Expected cancellation")
+    } catch is CancellationError {
+      // Expected.
+    } catch {
+      XCTFail("Unexpected error: \(error)")
+    }
+
+    XCTAssertEqual(try Data(contentsOf: destination), oldDestination)
+    let siblings = try FileManager.default.contentsOfDirectory(
+      at: fixture.directory,
+      includingPropertiesForKeys: nil
+    )
+    XCTAssertFalse(siblings.contains { $0.lastPathComponent.contains(".photosuite-tmp-") })
+  }
+
   func testSuccessfulExportDoesNotChangeSourceChecksum() async throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
@@ -117,6 +155,33 @@ final class JPEGExportTests: XCTestCase {
     )
 
     XCTAssertEqual(try DeterministicImageFixture.checksum(of: fixture.source), checksum)
+  }
+
+  func testDerivativeFingerprintUsesValidatedTemporaryBytesWithoutRereadingDestination()
+    async throws
+  {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let destination = fixture.directory.appendingPathComponent("mutated-after-publication.jpg")
+    let archive = fixture.directory.appendingPathComponent("validated-temporary.jpg")
+    let tamperedDestination = Data("publisher changed destination after moving it".utf8)
+    let exporter = AtomicJPEGExporter(
+      decoder: try AppleRawDecoder(),
+      publisher: ArchivingMutatingPublisher(
+        archiveURL: archive,
+        replacementData: tamperedDestination
+      )
+    )
+
+    let result = try await exporter.export(
+      makeRequest(source: fixture.source, destination: destination)
+    )
+
+    let fingerprint = try XCTUnwrap(result.derivative.fingerprint)
+    let archivedData = try Data(contentsOf: archive)
+    XCTAssertEqual(fingerprint.sha256, try DeterministicImageFixture.checksum(of: archive))
+    XCTAssertEqual(fingerprint.byteCount, UInt64(archivedData.count))
+    XCTAssertEqual(try Data(contentsOf: destination), tamperedDestination)
   }
 
   func testArbitraryRotationCompositesTransparentCornersOverBlack() async throws {
@@ -177,6 +242,59 @@ final class JPEGExportTests: XCTestCase {
     )
   }
 
+  func testExportRejectsDecoderIdentifierAndVersionPinMismatches() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let destination = fixture.directory.appendingPathComponent("pin-mismatch.jpg")
+    let exporter = AtomicJPEGExporter(decoder: try AppleRawDecoder())
+    let wrongIdentifierRecipe = EditRecipe(
+      assetID: UUID(),
+      pins: EnginePins(
+        decoderIdentifier: "com.example.wrong",
+        decoderVersion: "system-default",
+        renderSchemaVersion: 1,
+        cameraProfileVersion: nil,
+        modelVersions: [:]
+      )
+    )
+    let wrongVersionRecipe = EditRecipe(
+      assetID: UUID(),
+      pins: EnginePins(
+        decoderIdentifier: "com.apple.coreimage.common-image",
+        decoderVersion: "future-common-decoder",
+        renderSchemaVersion: 1,
+        cameraProfileVersion: nil,
+        modelVersions: [:]
+      )
+    )
+
+    await assertExportError(
+      exporter,
+      request: makeRequest(
+        source: fixture.source,
+        destination: destination,
+        recipe: wrongIdentifierRecipe
+      ),
+      expected: .decoderIdentifierMismatch(
+        expected: "com.example.wrong",
+        actual: "com.apple.coreimage.common-image"
+      )
+    )
+    await assertExportError(
+      exporter,
+      request: makeRequest(
+        source: fixture.source,
+        destination: destination,
+        recipe: wrongVersionRecipe
+      ),
+      expected: .decoderVersionMismatch(
+        expected: "future-common-decoder",
+        actual: "system-default"
+      )
+    )
+    XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+  }
+
   private func makeFixture() throws -> (directory: URL, source: URL) {
     let directory = try DeterministicImageFixture.makeDirectory()
     return (directory, try DeterministicImageFixture.makePNG(in: directory))
@@ -201,7 +319,7 @@ final class JPEGExportTests: XCTestCase {
       assetID: UUID(uuidString: "00000000-0000-0000-0000-000000000007")!,
       revision: 3,
       pins: EnginePins(
-        decoderIdentifier: "com.apple.coreimage",
+        decoderIdentifier: "com.apple.coreimage.common-image",
         decoderVersion: "system-default",
         renderSchemaVersion: 1,
         cameraProfileVersion: nil,
@@ -236,5 +354,45 @@ private struct FailingAtomicFilePublisher: AtomicFilePublishing {
 
   enum Failure: Error {
     case expected
+  }
+}
+
+private struct ArchivingMutatingPublisher: AtomicFilePublishing {
+  let archiveURL: URL
+  let replacementData: Data
+
+  func publish(temporaryURL: URL, destinationURL: URL) throws {
+    try FileManager.default.copyItem(at: temporaryURL, to: archiveURL)
+    try FileManager.default.moveItem(at: temporaryURL, to: destinationURL)
+    try replacementData.write(to: destinationURL)
+  }
+}
+
+private actor SuspendedPublicationGate: ExportPublicationGating {
+  private var entered = false
+  private var enteredContinuations: [CheckedContinuation<Void, Never>] = []
+  private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+  func waitBeforePublication() async {
+    entered = true
+    for continuation in enteredContinuations {
+      continuation.resume()
+    }
+    enteredContinuations.removeAll()
+    await withCheckedContinuation { continuation in
+      releaseContinuation = continuation
+    }
+  }
+
+  func waitUntilEntered() async {
+    guard !entered else { return }
+    await withCheckedContinuation { continuation in
+      enteredContinuations.append(continuation)
+    }
+  }
+
+  func release() {
+    releaseContinuation?.resume()
+    releaseContinuation = nil
   }
 }

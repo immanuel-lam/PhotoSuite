@@ -32,7 +32,8 @@ public actor AppleRawDecoder: RawDecoder {
     }
     guard
       let acescg = CGColorSpace(name: CGColorSpace.acescgLinear),
-      let extendedACEScg = CGColorSpaceCreateExtended(acescg)
+      let extendedACEScg = CGColorSpaceCreateExtended(acescg),
+      CGColorSpaceUsesExtendedRange(extendedACEScg)
     else {
       throw RenderCoreError.colorSpaceUnavailable("extended ACEScg")
     }
@@ -62,10 +63,12 @@ public actor AppleRawDecoder: RawDecoder {
   }
 
   public func decode(_ request: RawDecodeRequest) async throws -> RawDecodeResult {
+    try Task.checkCancellation()
     let decoded = try decodeImage(
       at: request.sourceURL,
       decoderVersion: request.decoderVersion
     )
+    try Task.checkCancellation()
     let extent = decoded.image.extent.integral
     let width = Int(extent.width)
     let height = Int(extent.height)
@@ -78,6 +81,7 @@ public actor AppleRawDecoder: RawDecoder {
     }
     let bytesPerRow = width * 4
     var data = Data(count: bytesPerRow * height)
+    try Task.checkCancellation()
     data.withUnsafeMutableBytes { buffer in
       guard let address = buffer.baseAddress else { return }
       context.render(
@@ -89,6 +93,7 @@ public actor AppleRawDecoder: RawDecoder {
         colorSpace: sRGBColorSpace
       )
     }
+    try Task.checkCancellation()
 
     return RawDecodeResult(
       image: ImageBuffer(
@@ -105,15 +110,17 @@ public actor AppleRawDecoder: RawDecoder {
   }
 
   public func capabilities(_ request: RawCapabilityRequest) async throws -> RawCapabilityResult {
+    try Task.checkCancellation()
     let versions: [String]
     if let sourceURL = request.sourceURL,
-      let raw = CIRAWFilter(imageURL: sourceURL),
-      supportsRAWDecoding(raw)
+      isRAWSource(at: sourceURL),
+      let raw = CIRAWFilter(imageURL: sourceURL)
     {
       versions = raw.supportedDecoderVersions.map(\.rawValue)
     } else {
       versions = []
     }
+    try Task.checkCancellation()
 
     return RawCapabilityResult(
       supportedCameraModels: CIRAWFilter.supportedCameraModels,
@@ -126,7 +133,9 @@ public actor AppleRawDecoder: RawDecoder {
     recipe: EditRecipe,
     maximumPixelDimension: Int?
   ) throws -> CGImage {
+    try Task.checkCancellation()
     var image = try compiledImage(sourceURL: sourceURL, recipe: recipe)
+    try Task.checkCancellation()
     var renderBounds = image.extent
 
     if let maximumPixelDimension {
@@ -149,6 +158,7 @@ public actor AppleRawDecoder: RawDecoder {
         image = scaled.cropped(to: renderBounds)
       }
     }
+    try Task.checkCancellation()
     guard
       let output = context.createCGImage(
         image,
@@ -159,13 +169,16 @@ public actor AppleRawDecoder: RawDecoder {
     else {
       throw RenderCoreError.renderFailed
     }
+    try Task.checkCancellation()
     return output
   }
 
   func exportJPEG(
     _ request: ExportRequest,
-    publisher: any AtomicFilePublishing
-  ) throws -> ExportResult {
+    publisher: any AtomicFilePublishing,
+    publicationGate: any ExportPublicationGating
+  ) async throws -> ExportResult {
+    try Task.checkCancellation()
     guard case .jpeg = request.format else {
       throw RenderCoreError.unsupportedExportFormat(exportFormatName(request.format))
     }
@@ -184,6 +197,7 @@ public actor AppleRawDecoder: RawDecoder {
     }
 
     let image = try compiledImage(sourceURL: request.sourceURL, recipe: request.recipe)
+    try Task.checkCancellation()
     let black = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 1))
       .cropped(to: image.extent)
     let opaqueImage = image.composited(over: black).cropped(to: image.extent)
@@ -203,6 +217,7 @@ public actor AppleRawDecoder: RawDecoder {
     )
     defer { try? FileManager.default.removeItem(at: temporaryURL) }
 
+    try Task.checkCancellation()
     do {
       try context.writeJPEGRepresentation(
         of: opaqueImage,
@@ -215,6 +230,7 @@ public actor AppleRawDecoder: RawDecoder {
     } catch {
       throw RenderCoreError.jpegEncodingFailed(request.destinationURL)
     }
+    try Task.checkCancellation()
 
     guard
       let temporaryData = try? Data(contentsOf: temporaryURL),
@@ -224,7 +240,22 @@ public actor AppleRawDecoder: RawDecoder {
     else {
       throw RenderCoreError.jpegEncodingFailed(request.destinationURL)
     }
+    try Task.checkCancellation()
+    let digest = SHA256.hash(data: temporaryData)
+      .map { String(format: "%02x", $0) }
+      .joined()
+    guard
+      let fingerprint = SourceFingerprint(
+        sha256: digest,
+        byteCount: UInt64(temporaryData.count),
+        modificationDate: nil
+      )
+    else {
+      throw RenderCoreError.jpegEncodingFailed(request.destinationURL)
+    }
 
+    await publicationGate.waitBeforePublication()
+    try Task.checkCancellation()
     do {
       try publisher.publish(
         temporaryURL: temporaryURL,
@@ -233,19 +264,6 @@ public actor AppleRawDecoder: RawDecoder {
     } catch {
       throw RenderCoreError.atomicWriteFailed(request.destinationURL)
     }
-
-    let finalData = try Data(contentsOf: request.destinationURL)
-    let digest = SHA256.hash(data: finalData)
-      .map { String(format: "%02x", $0) }
-      .joined()
-    let modificationDate = try? request.destinationURL.resourceValues(
-      forKeys: [.contentModificationDateKey]
-    ).contentModificationDate
-    let fingerprint = SourceFingerprint(
-      sha256: digest,
-      byteCount: UInt64(finalData.count),
-      modificationDate: modificationDate
-    )
 
     return ExportResult(
       derivative: DurableDerivative(
@@ -262,12 +280,28 @@ public actor AppleRawDecoder: RawDecoder {
   }
 
   private func compiledImage(sourceURL: URL, recipe: EditRecipe) throws -> CIImage {
+    try Task.checkCancellation()
     let decoderVersion =
       recipe.pins.decoderIdentifier == "com.apple.ciraw"
       ? recipe.pins.decoderVersion
       : nil
     let decoded = try decodeImage(at: sourceURL, decoderVersion: decoderVersion)
-    return try EditGraphCompiler.compile(decoded.image, recipe: recipe)
+    try Task.checkCancellation()
+    guard decoded.decoderIdentifier == recipe.pins.decoderIdentifier else {
+      throw RenderCoreError.decoderIdentifierMismatch(
+        expected: recipe.pins.decoderIdentifier,
+        actual: decoded.decoderIdentifier
+      )
+    }
+    guard decoded.decoderVersion == recipe.pins.decoderVersion else {
+      throw RenderCoreError.decoderVersionMismatch(
+        expected: recipe.pins.decoderVersion,
+        actual: decoded.decoderVersion
+      )
+    }
+    let image = try EditGraphCompiler.compile(decoded.image, recipe: recipe)
+    try Task.checkCancellation()
+    return image
   }
 
   private func exportFormatName(_ format: ExportFormat) -> String {
@@ -285,9 +319,10 @@ public actor AppleRawDecoder: RawDecoder {
       throw RenderCoreError.unreadableSource(sourceURL)
     }
 
-    if let raw = CIRAWFilter(imageURL: sourceURL),
-      supportsRAWDecoding(raw)
-    {
+    if isRAWSource(at: sourceURL) {
+      guard let raw = CIRAWFilter(imageURL: sourceURL) else {
+        throw RenderCoreError.unsupportedSource(sourceURL)
+      }
       if let decoderVersion {
         guard
           let supportedVersion = raw.supportedDecoderVersions.first(where: {
@@ -359,8 +394,15 @@ public actor AppleRawDecoder: RawDecoder {
     }
   }
 
-  private func supportsRAWDecoding(_ raw: CIRAWFilter) -> Bool {
-    raw.supportedDecoderVersions.contains { $0 != .none }
+  private func isRAWSource(at sourceURL: URL) -> Bool {
+    if let source = CGImageSourceCreateWithURL(sourceURL as CFURL, nil),
+      let detectedType = CGImageSourceGetType(source),
+      UTType(detectedType as String)?.conforms(to: .rawImage) == true
+    {
+      return true
+    }
+    return (try? sourceURL.resourceValues(forKeys: [.contentTypeKey]).contentType)?
+      .conforms(to: .rawImage) == true
   }
 
   private func isRecognizedImageContainer(at sourceURL: URL) -> Bool {

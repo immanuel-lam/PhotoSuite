@@ -75,6 +75,56 @@ enum DeterministicImageFixture {
     return url
   }
 
+  static func makeOrientedTIFF(
+    in directory: URL,
+    name: String = "oriented.tiff"
+  ) throws -> URL {
+    let width = 2
+    let height = 3
+    let red: [UInt8] = [240, 20, 20, 255]
+    let blue: [UInt8] = [20, 20, 240, 255]
+    let data = Data((0..<height).flatMap { _ in red + blue })
+    guard
+      let provider = CGDataProvider(data: data as CFData),
+      let image = CGImage(
+        width: width,
+        height: height,
+        bitsPerComponent: 8,
+        bitsPerPixel: 32,
+        bytesPerRow: width * 4,
+        space: CGColorSpace(name: CGColorSpace.sRGB)!,
+        bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+        provider: provider,
+        decode: nil,
+        shouldInterpolate: false,
+        intent: .defaultIntent
+      )
+    else {
+      throw FixtureError.imageCreationFailed
+    }
+
+    let url = directory.appendingPathComponent(name)
+    guard
+      let destination = CGImageDestinationCreateWithURL(
+        url as CFURL,
+        UTType.tiff.identifier as CFString,
+        1,
+        nil
+      )
+    else {
+      throw FixtureError.destinationCreationFailed
+    }
+    CGImageDestinationAddImage(
+      destination,
+      image,
+      [kCGImagePropertyOrientation: 6] as CFDictionary
+    )
+    guard CGImageDestinationFinalize(destination) else {
+      throw FixtureError.encodingFailed
+    }
+    return url
+  }
+
   static func checksum(of url: URL) throws -> String {
     SHA256.hash(data: try Data(contentsOf: url))
       .map { String(format: "%02x", $0) }

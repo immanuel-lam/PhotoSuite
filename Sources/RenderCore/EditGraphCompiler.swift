@@ -42,13 +42,14 @@ enum EditGraphCompiler {
     for (index, operation) in recipe.operations.enumerated() {
       switch operation {
       case .exposureEV(let delta):
-        guard delta.isFinite else {
+        let exposure = Float(delta)
+        guard delta.isFinite, exposure.isFinite else {
           throw invalid(index, "exposureEV")
         }
         let filter = CIFilter.exposureAdjust()
         filter.inputImage = image
-        filter.ev = Float(delta)
-        image = try output(of: filter)
+        filter.ev = exposure
+        image = try output(of: filter, index: index, operation: "exposureEV")
 
       case .contrast(let delta):
         try validateNormalized(delta, index: index, operation: "contrast")
@@ -57,7 +58,7 @@ enum EditGraphCompiler {
         filter.contrast = Float(RecipeRenderContractV1.contrastFactor(for: delta))
         filter.saturation = 1
         filter.brightness = 0
-        image = try output(of: filter)
+        image = try output(of: filter, index: index, operation: "contrast")
 
       case .highlights(let delta):
         try validateNormalized(delta, index: index, operation: "highlights")
@@ -84,7 +85,7 @@ enum EditGraphCompiler {
         filter.contrast = 1
         filter.saturation = Float(RecipeRenderContractV1.saturationFactor(for: delta))
         filter.brightness = 0
-        image = try output(of: filter)
+        image = try output(of: filter, index: index, operation: "saturation")
 
       case .normalizedCrop(let crop):
         image = try cropImage(image, crop: crop, index: index)
@@ -178,13 +179,13 @@ enum EditGraphCompiler {
     let height = extent.height
     let transform: CGAffineTransform
 
-    if approximatelyEqual(positiveDegrees, 0) || approximatelyEqual(positiveDegrees, 360) {
+    if positiveDegrees == 0 {
       return image
-    } else if approximatelyEqual(positiveDegrees, 90) {
+    } else if positiveDegrees == 90 {
       transform = CGAffineTransform(a: 0, b: 1, c: -1, d: 0, tx: height, ty: 0)
-    } else if approximatelyEqual(positiveDegrees, 180) {
+    } else if positiveDegrees == 180 {
       transform = CGAffineTransform(a: -1, b: 0, c: 0, d: -1, tx: width, ty: height)
-    } else if approximatelyEqual(positiveDegrees, 270) {
+    } else if positiveDegrees == 270 {
       transform = CGAffineTransform(a: 0, b: -1, c: 1, d: 0, tx: 0, ty: width)
     } else {
       let radians = positiveDegrees * .pi / 180
@@ -203,12 +204,14 @@ enum EditGraphCompiler {
     }
 
     let rotated = image.transformed(by: transform)
-    let boundingBox = rotated.extent.integral
+    let boundingBox = extent.applying(transform).integral
     guard validExtent(boundingBox) else {
       throw invalid(index, "rotationDegrees")
     }
+    let transparentCanvas = CIImage(color: .clear).cropped(to: boundingBox)
     return
       rotated
+      .composited(over: transparentCanvas)
       .cropped(to: boundingBox)
       .transformed(
         by: CGAffineTransform(
@@ -218,9 +221,13 @@ enum EditGraphCompiler {
       )
   }
 
-  private static func output(of filter: CIFilter) throws -> CIImage {
-    guard let output = filter.outputImage else {
-      throw RenderCoreError.renderFailed
+  private static func output(
+    of filter: CIFilter,
+    index: Int,
+    operation: String
+  ) throws -> CIImage {
+    guard let output = filter.outputImage, validExtent(output.extent) else {
+      throw invalid(index, operation)
     }
     return output
   }
@@ -241,10 +248,6 @@ enum EditGraphCompiler {
       && !extent.isEmpty
       && extent.width > 0
       && extent.height > 0
-  }
-
-  private static func approximatelyEqual(_ lhs: Double, _ rhs: Double) -> Bool {
-    abs(lhs - rhs) < 0.000_000_1
   }
 
   private static func invalid(_ index: Int, _ operation: String) -> RenderCoreError {

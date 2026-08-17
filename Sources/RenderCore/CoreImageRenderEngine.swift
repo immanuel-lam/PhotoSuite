@@ -15,6 +15,7 @@ public struct CoreImageRenderEngine: RenderEngine, Sendable {
   }
 
   public func render(_ request: RenderRequest) async throws -> RenderResult {
+    try Task.checkCancellation()
     guard request.outputColorSpaceName == "extended-linear-display-p3" else {
       throw RenderCoreError.unsupportedOutputColorSpace(request.outputColorSpaceName)
     }
@@ -23,6 +24,7 @@ public struct CoreImageRenderEngine: RenderEngine, Sendable {
       recipe: request.recipe,
       maximumPixelDimension: request.maximumPixelDimension
     )
+    try Task.checkCancellation()
     let data = NSMutableData()
     guard
       let destination = CGImageDestinationCreateWithData(
@@ -35,9 +37,11 @@ public struct CoreImageRenderEngine: RenderEngine, Sendable {
       throw RenderCoreError.renderFailed
     }
     CGImageDestinationAddImage(destination, image, nil)
+    try Task.checkCancellation()
     guard CGImageDestinationFinalize(destination) else {
       throw RenderCoreError.renderFailed
     }
+    try Task.checkCancellation()
     guard let dimensions = PixelDimensions(width: image.width, height: image.height) else {
       throw RenderCoreError.renderFailed
     }
