@@ -650,9 +650,10 @@ public final class PhotoWorkspace {
       case .highlights: 2
       case .shadows: 3
       case .saturation: 4
-      case .normalizedCrop: 5
-      case .rotationDegrees: 6
-      case .unknown: 7
+      case .threeWayColorGrade: 5
+      case .normalizedCrop: 6
+      case .rotationDegrees: 7
+      case .unknown: 8
       }
     }
     return operations.enumerated().sorted { left, right in

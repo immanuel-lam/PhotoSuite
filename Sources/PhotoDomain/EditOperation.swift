@@ -8,6 +8,7 @@ public enum EditOperation: Codable, Hashable, Sendable {
   case highlights(Double)
   case shadows(Double)
   case saturation(Double)
+  case threeWayColorGrade(ThreeWayColorGrade)
   case normalizedCrop(NormalizedRect)
   case rotationDegrees(Double)
   case unknown(String, payload: [String: JSONValue])
@@ -18,6 +19,7 @@ public enum EditOperation: Codable, Hashable, Sendable {
     "highlights",
     "shadows",
     "saturation",
+    "threeWayColorGrade",
     "normalizedCrop",
     "rotationDegrees",
   ]
@@ -27,6 +29,7 @@ public enum EditOperation: Codable, Hashable, Sendable {
     let kindKey = DynamicCodingKey(stringValue: "kind")
     let valueKey = DynamicCodingKey(stringValue: "value")
     let rectKey = DynamicCodingKey(stringValue: "rect")
+    let gradeKey = DynamicCodingKey(stringValue: "grade")
     let decodedKind = try UnknownStringCodeCoding.decode(
       from: container.superDecoder(forKey: kindKey)
     )
@@ -42,6 +45,8 @@ public enum EditOperation: Codable, Hashable, Sendable {
       self = .shadows(try container.decode(Double.self, forKey: valueKey))
     case ("saturation", false):
       self = .saturation(try container.decode(Double.self, forKey: valueKey))
+    case ("threeWayColorGrade", false):
+      self = .threeWayColorGrade(try container.decode(ThreeWayColorGrade.self, forKey: gradeKey))
     case ("normalizedCrop", false):
       self = .normalizedCrop(try container.decode(NormalizedRect.self, forKey: rectKey))
     case ("rotationDegrees", false):
@@ -60,6 +65,7 @@ public enum EditOperation: Codable, Hashable, Sendable {
     let kindKey = DynamicCodingKey(stringValue: "kind")
     let valueKey = DynamicCodingKey(stringValue: "value")
     let rectKey = DynamicCodingKey(stringValue: "rect")
+    let gradeKey = DynamicCodingKey(stringValue: "grade")
 
     switch self {
     case .exposureEV(let value):
@@ -77,6 +83,9 @@ public enum EditOperation: Codable, Hashable, Sendable {
     case .saturation(let value):
       try container.encode("saturation", forKey: kindKey)
       try container.encode(value, forKey: valueKey)
+    case .threeWayColorGrade(let grade):
+      try container.encode("threeWayColorGrade", forKey: kindKey)
+      try container.encode(grade, forKey: gradeKey)
     case .normalizedCrop(let rect):
       try container.encode("normalizedCrop", forKey: kindKey)
       try container.encode(rect, forKey: rectKey)

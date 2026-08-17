@@ -19,7 +19,13 @@ final class JPEGExportTests: XCTestCase {
     let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
     let exporter = AtomicJPEGExporter(decoder: decoder)
     let crop = try XCTUnwrap(NormalizedRect(x: 0, y: 0, width: 0.5, height: 1))
-    let recipe = makeRecipe(operations: [.normalizedCrop(crop), .rotationDegrees(90)])
+    let recipe = makeRecipe(
+      operations: [
+        .threeWayColorGrade(try makeColorGrade()),
+        .normalizedCrop(crop),
+        .rotationDegrees(90),
+      ]
+    )
     let preview = try await decoder.preview(
       sourceURL: fixture.source,
       recipe: recipe,
@@ -61,7 +67,11 @@ final class JPEGExportTests: XCTestCase {
     let exporter = AtomicJPEGExporter(decoder: decoder)
 
     _ = try await exporter.export(
-      makeRequest(source: fixture.source, destination: destination)
+      makeRequest(
+        source: fixture.source,
+        destination: destination,
+        recipe: makeRecipe(operations: [.threeWayColorGrade(try makeColorGrade())])
+      )
     )
 
     let finalData = try Data(contentsOf: destination)
@@ -366,6 +376,22 @@ final class JPEGExportTests: XCTestCase {
         modelVersions: [:]
       ),
       operations: operations
+    )
+  }
+
+  private func makeColorGrade() throws -> ThreeWayColorGrade {
+    try XCTUnwrap(
+      ThreeWayColorGrade(
+        shadows: try XCTUnwrap(
+          ThreeWayColorGrade.Tone(hueDegrees: 230, chroma: 0.25, luminance: -0.1)
+        ),
+        midtones: try XCTUnwrap(
+          ThreeWayColorGrade.Tone(hueDegrees: 30, chroma: 0.2, luminance: 0)
+        ),
+        highlights: try XCTUnwrap(
+          ThreeWayColorGrade.Tone(hueDegrees: 50, chroma: 0.15, luminance: 0.1)
+        )
+      )
     )
   }
 

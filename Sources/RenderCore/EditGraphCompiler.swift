@@ -87,6 +87,9 @@ enum EditGraphCompiler {
         filter.brightness = 0
         image = try output(of: filter, index: index, operation: "saturation")
 
+      case .threeWayColorGrade(let grade):
+        image = try ThreeWayColorGradeRenderer.apply(image, grade: grade, index: index)
+
       case .normalizedCrop(let crop):
         image = try cropImage(image, crop: crop, index: index)
 

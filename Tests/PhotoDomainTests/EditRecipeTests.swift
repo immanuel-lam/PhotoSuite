@@ -22,6 +22,30 @@ final class EditRecipeTests: XCTestCase {
     XCTAssertEqual(decoded, recipe)
   }
 
+  func testThreeWayColorGradeValidatesAndRoundTripsAsADurableOperation() throws {
+    let shadows = try XCTUnwrap(
+      ThreeWayColorGrade.Tone(hueDegrees: 240, chroma: 0.4, luminance: -0.2)
+    )
+    let midtones = try XCTUnwrap(
+      ThreeWayColorGrade.Tone(hueDegrees: 30, chroma: 0.2, luminance: 0.1)
+    )
+    let highlights = try XCTUnwrap(
+      ThreeWayColorGrade.Tone(hueDegrees: 60, chroma: 0.3, luminance: 0.25)
+    )
+    let grade = try XCTUnwrap(
+      ThreeWayColorGrade(shadows: shadows, midtones: midtones, highlights: highlights)
+    )
+    let operation = EditOperation.threeWayColorGrade(grade)
+
+    XCTAssertTrue(ThreeWayColorGrade.neutral.isNeutral)
+    XCTAssertNil(ThreeWayColorGrade.Tone(hueDegrees: -0.1, chroma: 0, luminance: 0))
+    XCTAssertNil(ThreeWayColorGrade.Tone(hueDegrees: 0, chroma: 1.01, luminance: 0))
+    XCTAssertNil(ThreeWayColorGrade.Tone(hueDegrees: 0, chroma: 0, luminance: -1.01))
+    XCTAssertEqual(
+      try JSONDecoder().decode(EditOperation.self, from: JSONEncoder().encode(operation)), operation
+    )
+  }
+
   func testJSONRoundTripPreservesOperationOrderAndExplicitDiscriminators() throws {
     let crop = try XCTUnwrap(NormalizedRect(x: 0.1, y: 0.2, width: 0.7, height: 0.6))
     let operations: [EditOperation] = [

@@ -64,6 +64,144 @@ final class RenderGraphTests: XCTestCase {
     )
   }
 
+  func testNeutralThreeWayColorGradeIsAnExactIdentityOperation() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
+    let baseline = try await decoder.preview(
+      sourceURL: fixture.source,
+      recipe: makeRecipe(),
+      maximumPixelDimension: nil
+    )
+    let graded = try await decoder.preview(
+      sourceURL: fixture.source,
+      recipe: makeRecipe(operations: [.threeWayColorGrade(.neutral)]),
+      maximumPixelDimension: nil
+    )
+
+    XCTAssertEqual(
+      try DeterministicImageFixture.rgba8Data(from: graded),
+      try DeterministicImageFixture.rgba8Data(from: baseline)
+    )
+  }
+
+  func testShadowColorGradeHasItsLargestEffectInShadows() async throws {
+    let fixture = try makeTonalFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
+    let baseline = try await decoder.preview(
+      sourceURL: fixture.source,
+      recipe: makeRecipe(),
+      maximumPixelDimension: nil
+    )
+    let grade = try makeGrade(shadows: .init(hueDegrees: 0, chroma: 0, luminance: 0.25))
+    let graded = try await decoder.preview(
+      sourceURL: fixture.source,
+      recipe: makeRecipe(operations: [.threeWayColorGrade(grade)]),
+      maximumPixelDimension: nil
+    )
+
+    let baselineData = try DeterministicImageFixture.rgba8Data(from: baseline)
+    let gradedData = try DeterministicImageFixture.rgba8Data(from: graded)
+    let darkLift =
+      Int(DeterministicImageFixture.pixel(x: 0, y: 0, width: 3, in: gradedData).red)
+      - Int(DeterministicImageFixture.pixel(x: 0, y: 0, width: 3, in: baselineData).red)
+    let brightLift =
+      Int(DeterministicImageFixture.pixel(x: 2, y: 0, width: 3, in: gradedData).red)
+      - Int(DeterministicImageFixture.pixel(x: 2, y: 0, width: 3, in: baselineData).red)
+
+    XCTAssertGreaterThan(darkLift, brightLift)
+    XCTAssertEqual(darkLift, 85)
+  }
+
+  func testMidtoneColorGradeHasItsLargestEffectInMidtones() async throws {
+    let fixture = try makeTonalFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
+    let baseline = try await decoder.preview(
+      sourceURL: fixture.source,
+      recipe: makeRecipe(),
+      maximumPixelDimension: nil
+    )
+    let grade = try makeGrade(midtones: .init(hueDegrees: 0, chroma: 0, luminance: 0.25))
+    let graded = try await decoder.preview(
+      sourceURL: fixture.source,
+      recipe: makeRecipe(operations: [.threeWayColorGrade(grade)]),
+      maximumPixelDimension: nil
+    )
+
+    let baselineData = try DeterministicImageFixture.rgba8Data(from: baseline)
+    let gradedData = try DeterministicImageFixture.rgba8Data(from: graded)
+    let midLift =
+      Int(DeterministicImageFixture.pixel(x: 1, y: 0, width: 3, in: gradedData).red)
+      - Int(DeterministicImageFixture.pixel(x: 1, y: 0, width: 3, in: baselineData).red)
+    let darkLift =
+      Int(DeterministicImageFixture.pixel(x: 0, y: 0, width: 3, in: gradedData).red)
+      - Int(DeterministicImageFixture.pixel(x: 0, y: 0, width: 3, in: baselineData).red)
+    let brightLift =
+      Int(DeterministicImageFixture.pixel(x: 2, y: 0, width: 3, in: gradedData).red)
+      - Int(DeterministicImageFixture.pixel(x: 2, y: 0, width: 3, in: baselineData).red)
+
+    XCTAssertGreaterThan(midLift, darkLift)
+    XCTAssertGreaterThan(midLift, brightLift)
+    XCTAssertEqual(midLift, 37)
+  }
+
+  func testHighlightColorGradeHasItsLargestEffectInHighlights() async throws {
+    let fixture = try makeTonalFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
+    let baseline = try await decoder.preview(
+      sourceURL: fixture.source,
+      recipe: makeRecipe(),
+      maximumPixelDimension: nil
+    )
+    let grade = try makeGrade(highlights: .init(hueDegrees: 0, chroma: 0, luminance: 0.25))
+    let graded = try await decoder.preview(
+      sourceURL: fixture.source,
+      recipe: makeRecipe(operations: [.threeWayColorGrade(grade)]),
+      maximumPixelDimension: nil
+    )
+
+    let baselineData = try DeterministicImageFixture.rgba8Data(from: baseline)
+    let gradedData = try DeterministicImageFixture.rgba8Data(from: graded)
+    let darkLift =
+      Int(DeterministicImageFixture.pixel(x: 0, y: 0, width: 3, in: gradedData).red)
+      - Int(DeterministicImageFixture.pixel(x: 0, y: 0, width: 3, in: baselineData).red)
+    let brightLift =
+      Int(DeterministicImageFixture.pixel(x: 2, y: 0, width: 3, in: gradedData).red)
+      - Int(DeterministicImageFixture.pixel(x: 2, y: 0, width: 3, in: baselineData).red)
+
+    XCTAssertGreaterThan(brightLift, darkLift)
+    XCTAssertEqual(brightLift, 12)
+  }
+
+  func testShadowHueAndChromaBiasTheSelectedColourChannels() async throws {
+    let fixture = try makeTonalFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
+    let baseline = try await decoder.preview(
+      sourceURL: fixture.source,
+      recipe: makeRecipe(),
+      maximumPixelDimension: nil
+    )
+    let grade = try makeGrade(shadows: .init(hueDegrees: 240, chroma: 0.5, luminance: 0))
+    let graded = try await decoder.preview(
+      sourceURL: fixture.source,
+      recipe: makeRecipe(operations: [.threeWayColorGrade(grade)]),
+      maximumPixelDimension: nil
+    )
+
+    let baselineData = try DeterministicImageFixture.rgba8Data(from: baseline)
+    let gradedData = try DeterministicImageFixture.rgba8Data(from: graded)
+    let baselinePixel = DeterministicImageFixture.pixel(x: 0, y: 0, width: 3, in: baselineData)
+    let gradedPixel = DeterministicImageFixture.pixel(x: 0, y: 0, width: 3, in: gradedData)
+    let redDelta = Int(gradedPixel.red) - Int(baselinePixel.red)
+    let blueDelta = Int(gradedPixel.blue) - Int(baselinePixel.blue)
+
+    XCTAssertGreaterThan(blueDelta, redDelta)
+  }
+
   func testHighlightAndShadowDeltasSelectDifferentTonalRanges() async throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
@@ -318,6 +456,25 @@ final class RenderGraphTests: XCTestCase {
     return (directory, try DeterministicImageFixture.makePNG(in: directory))
   }
 
+  private func makeTonalFixture() throws -> (directory: URL, source: URL) {
+    let directory = try DeterministicImageFixture.makeDirectory()
+    let pixels: [UInt8] = [
+      64, 64, 64, 255,
+      188, 188, 188, 255,
+      243, 243, 243, 255,
+    ]
+    return (
+      directory,
+      try DeterministicImageFixture.makePNG(
+        in: directory,
+        name: "tonal.png",
+        width: 3,
+        height: 1,
+        pixels: pixels
+      )
+    )
+  }
+
   private func makeRecipe(operations: [EditOperation] = []) -> EditRecipe {
     EditRecipe(
       assetID: UUID(uuidString: "00000000-0000-0000-0000-000000000005")!,
@@ -341,6 +498,20 @@ final class RenderGraphTests: XCTestCase {
       y: image.height / 2,
       width: image.width,
       in: data
+    )
+  }
+
+  private func makeGrade(
+    shadows: ThreeWayColorGrade.Tone? = nil,
+    midtones: ThreeWayColorGrade.Tone? = nil,
+    highlights: ThreeWayColorGrade.Tone? = nil
+  ) throws -> ThreeWayColorGrade {
+    try XCTUnwrap(
+      ThreeWayColorGrade(
+        shadows: shadows ?? .init(hueDegrees: 0, chroma: 0, luminance: 0)!,
+        midtones: midtones ?? .init(hueDegrees: 0, chroma: 0, luminance: 0)!,
+        highlights: highlights ?? .init(hueDegrees: 0, chroma: 0, luminance: 0)!
+      )
     )
   }
 }

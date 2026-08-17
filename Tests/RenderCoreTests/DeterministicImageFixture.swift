@@ -29,18 +29,27 @@ enum DeterministicImageFixture {
     in directory: URL,
     name: String = "fixture.png",
     width: Int = 8,
-    height: Int = 6
+    height: Int = 6,
+    pixels explicitPixels: [UInt8]? = nil
   ) throws -> URL {
-    var pixels = [UInt8]()
-    pixels.reserveCapacity(width * height * 4)
-
-    for y in 0..<height {
-      for x in 0..<width {
-        pixels.append(UInt8(20 + x * 28))
-        pixels.append(UInt8(24 + y * 36))
-        pixels.append(UInt8(16 + ((x + y) % 6) * 36))
-        pixels.append(255)
+    let pixels: [UInt8]
+    if let explicitPixels {
+      guard explicitPixels.count == width * height * 4 else {
+        throw FixtureError.invalidPixelCount
       }
+      pixels = explicitPixels
+    } else {
+      var generated = [UInt8]()
+      generated.reserveCapacity(width * height * 4)
+      for y in 0..<height {
+        for x in 0..<width {
+          generated.append(UInt8(20 + x * 28))
+          generated.append(UInt8(24 + y * 36))
+          generated.append(UInt8(16 + ((x + y) % 6) * 36))
+          generated.append(255)
+        }
+      }
+      pixels = generated
     }
 
     let data = Data(pixels)
@@ -184,6 +193,7 @@ enum DeterministicImageFixture {
     case imageCreationFailed
     case destinationCreationFailed
     case encodingFailed
+    case invalidPixelCount
   }
 }
 

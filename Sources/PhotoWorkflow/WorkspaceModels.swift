@@ -65,18 +65,26 @@ public struct PreviewFrame: Hashable, Sendable {
   public let imageData: Data
   public let typeIdentifier: String
   public let pixelDimensions: PixelDimensions
+  public let histogram: RenderHistogram?
 
-  public init(imageData: Data, typeIdentifier: String, pixelDimensions: PixelDimensions) {
+  public init(
+    imageData: Data,
+    typeIdentifier: String,
+    pixelDimensions: PixelDimensions,
+    histogram: RenderHistogram? = nil
+  ) {
     self.imageData = imageData
     self.typeIdentifier = typeIdentifier
     self.pixelDimensions = pixelDimensions
+    self.histogram = histogram
   }
 
   init(_ result: RenderResult) {
     self.init(
       imageData: result.imageData,
       typeIdentifier: result.typeIdentifier,
-      pixelDimensions: result.pixelDimensions
+      pixelDimensions: result.pixelDimensions,
+      histogram: result.histogram
     )
   }
 }

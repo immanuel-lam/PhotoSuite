@@ -142,15 +142,46 @@ public struct RenderRequest: Codable, Hashable, Sendable {
   }
 }
 
+public struct RenderHistogram: Codable, Hashable, Sendable {
+  public static let binCount = 256
+
+  public let red: [UInt64]
+  public let green: [UInt64]
+  public let blue: [UInt64]
+  public let luminance: [UInt64]
+
+  public init?(red: [UInt64], green: [UInt64], blue: [UInt64], luminance: [UInt64]) {
+    guard
+      red.count == Self.binCount,
+      green.count == Self.binCount,
+      blue.count == Self.binCount,
+      luminance.count == Self.binCount
+    else {
+      return nil
+    }
+    self.red = red
+    self.green = green
+    self.blue = blue
+    self.luminance = luminance
+  }
+}
+
 public struct RenderResult: Codable, Hashable, Sendable {
   public let imageData: Data
   public let typeIdentifier: String
   public let pixelDimensions: PixelDimensions
+  public let histogram: RenderHistogram?
 
-  public init(imageData: Data, typeIdentifier: String, pixelDimensions: PixelDimensions) {
+  public init(
+    imageData: Data,
+    typeIdentifier: String,
+    pixelDimensions: PixelDimensions,
+    histogram: RenderHistogram? = nil
+  ) {
     self.imageData = imageData
     self.typeIdentifier = typeIdentifier
     self.pixelDimensions = pixelDimensions
+    self.histogram = histogram
   }
 }
 

@@ -42,13 +42,16 @@ public struct CoreImageRenderEngine: RenderEngine, Sendable {
       throw RenderCoreError.renderFailed
     }
     try Task.checkCancellation()
+    let histogram = try RenderHistogramBuilder.make(from: data as Data)
+    try Task.checkCancellation()
     guard let dimensions = PixelDimensions(width: image.width, height: image.height) else {
       throw RenderCoreError.renderFailed
     }
     return RenderResult(
       imageData: data as Data,
       typeIdentifier: UTType.png.identifier,
-      pixelDimensions: dimensions
+      pixelDimensions: dimensions,
+      histogram: histogram
     )
   }
 }

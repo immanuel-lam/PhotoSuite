@@ -27,6 +27,7 @@ final class PhotoWorkspaceTests: XCTestCase {
     XCTAssertEqual(workspace.selectedAssetID, available.id)
     XCTAssertEqual(workspace.currentRecipe, restored)
     XCTAssertEqual(workspace.preview?.imageData, Data("preview-4".utf8))
+    XCTAssertEqual(workspace.preview?.histogram?.red.reduce(0, +), 1)
     let missingUpdates = await catalog.missingUpdates()
     let activeAccessCount = await access.activeAccessCount()
     XCTAssertEqual(missingUpdates, [missing.id: true, available.id: false])
@@ -536,7 +537,13 @@ private actor ImmediateRenderer: RenderEngine {
     return RenderResult(
       imageData: Data("preview-\(request.recipe.revision)".utf8),
       typeIdentifier: "public.png",
-      pixelDimensions: PixelDimensions(width: 20, height: 10)!
+      pixelDimensions: PixelDimensions(width: 20, height: 10)!,
+      histogram: RenderHistogram(
+        red: [UInt64](repeating: 0, count: 255) + [1],
+        green: [UInt64](repeating: 0, count: 255) + [1],
+        blue: [UInt64](repeating: 0, count: 255) + [1],
+        luminance: [UInt64](repeating: 0, count: 255) + [1]
+      )
     )
   }
 
