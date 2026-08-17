@@ -24,34 +24,44 @@ contains these tested components:
   black-and-white, and HDR-intent operations; and
 - atomic JPEG, PNG, HEIF, and TIFF delivery with tested resize, metadata,
   text-watermark, output-sharpening, and sequential batch-export options; and
-- MapKit GPS markers, AVFoundation device discovery, native print routing,
-  and explicit unavailable-state previews for book, slideshow, web gallery,
-  plug-in, Adobe migration, and tethered-capture features.
+- PDF book, silent H.264 slideshow, and self-contained static HTML gallery
+  output with atomic publication and cancellation cleanup; and
+- Apple Vision foreground, subject, and person masks with durable grayscale
+  coverage and stale-result protection; and
+- ImageCaptureCore camera discovery/status/events, tethered capture request
+  plumbing, and watched-folder import with settling and duplicate detection;
+  and
+- a catalog metadata inspector, MapKit GPS markers, AVFoundation device
+  discovery, and native print routing.
 
 The interface can import local sources, browse a catalog, apply basic and
 baseline Develop groups, crop and rotate, compare before and after, inspect
-the histogram and three-way colour grade, author versioned masks, and write
-a JPEG through Deliver. Session collections and stacks are not durable.
+the histogram and three-way colour grade, author versioned masks, edit
+catalog metadata, and write JPEG, PNG, HEIF, or TIFF output through Deliver.
+Session collections and stacks are not durable.
 The baseline controls and mask contracts are pre-alpha workflow evidence;
 they are not a Lightroom-equivalent implementation.
 
 Mask data, authoring, duplicate/synchronise requests, stale-result validation,
 deterministic rasterisation, graph composition, masked exposure, and masked
-colour grading exist. AI segmentation, real depth data, healing, clone,
-red-eye, and generative functions remain incomplete. AI contracts and status
-controls exist, but no verified model pack or inference exists.
+colour grading exist. Apple Vision foreground, subject, and person selection
+is available offline; sky, object, background, landscape, real depth,
+denoise, super-resolution, healing, clone, red-eye, and generative functions
+remain incomplete. No proprietary or network-only model pack is bundled.
 A common-image preview fallback is available when a source is not accepted
 as RAW; this is not a supported-camera list. A licensed real RAW fixture is
 absent, so the real RAW fixture test is skipped.
 
-The project has no Lightroom parity claim. Full tethered capture, print
-templates and soft proofing, book export, web publishing, plug-in hosting,
-Adobe migration, AI execution, healing, and production support for the full
-range of Lightroom formats remain incomplete. Metadata inspector and batch
-metadata UI, embedded/sidecar XMP writing, and hierarchical keyword tools are
-also incomplete. Cloud services, mobile clients, and web editing are out of
-scope. There is no signed, notarized, reproducible, or published application
-release. Do not use this pre-alpha revision for production photographs.
+The project has no Lightroom parity claim. Physical tethered transfer,
+vendor camera SDK adapters, print templates and soft proofing, hosted
+publishing, plug-in hosting, Adobe migration, AI features beyond the
+verified Vision subset, healing, and production support for the full range of
+Lightroom formats remain incomplete.
+Batch metadata editing, embedded/sidecar XMP writing, and hierarchical
+keyword tools are also incomplete. Cloud services, mobile clients, and web
+editing are out of scope. There is no signed, notarized, reproducible, or
+published application release. Do not use this pre-alpha revision for
+production photographs.
 
 The comparison baseline is Adobe Lightroom Classic 15.4.1. PhotoSuite
 does not claim feature, file-format, performance, workflow, plug-in, or

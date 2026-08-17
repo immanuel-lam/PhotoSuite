@@ -388,6 +388,28 @@ final class PhotoWorkspaceTests: XCTestCase {
     XCTAssertEqual(workspace.currentRecipe?.revision, 4)
   }
 
+  func testGeneratedMaskRequiresCurrentAssetAndRecipeRevision() async throws {
+    let asset = makeAsset(name: "vision.jpg")
+    let catalog = CatalogSpy(assets: [asset], recipes: [asset.id: makeRecipe(assetID: asset.id)])
+    let workspace = makeWorkspace(catalog: catalog)
+    await workspace.reopen()
+    let mask = MaskDefinition(
+      schemaVersion: 1,
+      kind: .subject,
+      name: "Vision Subject",
+      isInverted: false,
+      payload: Data([1, 2, 3])
+    )
+
+    await workspace.applyGeneratedMask(mask, assetID: asset.id, expectedRevision: 0)
+    XCTAssertEqual(workspace.currentRecipe?.revision, 1)
+    XCTAssertEqual(workspace.currentMasks, [mask])
+
+    await workspace.applyGeneratedMask(mask, assetID: asset.id, expectedRevision: 0)
+    XCTAssertEqual(workspace.currentRecipe?.revision, 1)
+    XCTAssertEqual(workspace.lastError, .staleAIResult)
+  }
+
   func testNewPreviewCancelsAndSuppressesStalePreview() async throws {
     let asset = makeAsset(name: "preview.jpg")
     let initial = makeRecipe(assetID: asset.id)

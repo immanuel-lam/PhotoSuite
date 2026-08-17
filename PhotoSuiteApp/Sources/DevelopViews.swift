@@ -155,7 +155,7 @@ struct DevelopInspector: View {
         MaskControls(workspace: workspace)
 
         Divider()
-        AIModelControls()
+        AIModelControls(workspace: workspace)
 
         Divider()
         Text("Geometry").font(.headline)

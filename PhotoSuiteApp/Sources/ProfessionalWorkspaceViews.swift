@@ -203,6 +203,9 @@ private struct ProfessionalMapView: View {
 private struct TetherStatusView: View {
   @Bindable var workspace: PhotoWorkspace
   @State private var cameraNames: [String] = []
+  @State private var nativeDevices: [CaptureDeviceStatus] = []
+  @State private var discovery: ImageCaptureCoreCameraDiscovery?
+  @State private var cameraError: String?
 
   var body: some View {
     ProfessionalStatusSurface(
@@ -220,14 +223,66 @@ private struct TetherStatusView: View {
             Label(name, systemImage: "camera")
           }
         }
-        Text("Still-image tether control needs a tested camera adapter. Capture is disabled.")
+        Divider()
+        Text("ImageCaptureCore")
+          .font(.headline)
+        if nativeDevices.isEmpty {
+          Text(
+            "No ImageCaptureCore camera is connected. Vendor SDK adapters can be installed separately."
+          )
           .font(.callout)
           .foregroundStyle(.secondary)
-        Button("Start Tethered Capture") {}
-          .disabled(true)
+        } else {
+          ForEach(nativeDevices) { device in
+            HStack {
+              VStack(alignment: .leading, spacing: 2) {
+                Text(device.name)
+                  .font(.callout.weight(.medium))
+                Text(device.state.displayName)
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+              }
+              Spacer()
+              Button("Capture") {
+                do {
+                  try discovery?.requestCapture(deviceID: device.id)
+                } catch {
+                  cameraError = error.localizedDescription
+                }
+              }
+              .buttonStyle(.bordered)
+              .disabled(!device.supportsTetheredCapture || device.state == .capturing)
+            }
+          }
+        }
+        if let cameraError {
+          Label(cameraError, systemImage: "exclamationmark.triangle")
+            .font(.caption)
+            .foregroundStyle(.orange)
+        }
+        Text(
+          "Physical camera transfer and vendor-specific controls remain subject to the installed adapter."
+        )
+        .font(.callout)
+        .foregroundStyle(.secondary)
       }
     }
-    .task { refreshDevices() }
+    .task {
+      refreshDevices()
+      #if canImport(ImageCaptureCore)
+        let adapter = ImageCaptureCoreCameraDiscovery()
+        discovery = adapter
+        adapter.start()
+        nativeDevices = adapter.devices
+        for await _ in adapter.makeEventStream() {
+          nativeDevices = adapter.devices
+        }
+      #endif
+    }
+    .onDisappear {
+      discovery?.stop()
+      discovery = nil
+    }
   }
 
   private func refreshDevices() {
@@ -290,7 +345,7 @@ private struct ProfessionalOutputToolView: View {
         }
       }
       if let output = workspace.lastProfessionalOutput {
-        Label("Published (output.lastPathComponent)", systemImage: "checkmark.circle.fill")
+        Label("Published \(output.lastPathComponent)", systemImage: "checkmark.circle.fill")
           .font(.callout)
           .foregroundStyle(.green)
           .textSelection(.enabled)
@@ -514,6 +569,18 @@ extension ProfessionalCapabilityBlocker {
       "No signed plug-in host or supported plug-in SDK is installed."
     case .adobeCatalogParserUnavailable:
       "No tested Adobe Lightroom catalog parser is installed."
+    }
+  }
+}
+
+extension CaptureDeviceState {
+  fileprivate var displayName: String {
+    switch self {
+    case .discovered: "Discovered"
+    case .ready: "Ready"
+    case .capturing: "Capturing"
+    case .unavailable(let reason): "Unavailable: \(reason)"
+    case .failed(let reason): "Failed: \(reason)"
     }
   }
 }

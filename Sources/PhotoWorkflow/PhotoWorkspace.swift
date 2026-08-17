@@ -571,6 +571,23 @@ public final class PhotoWorkspace {
     }
   }
 
+  /// Apply a result produced by a local AI provider only when it was generated for the current
+  /// photograph and recipe revision. The provider remains outside PhotoWorkflow so vendor or
+  /// system model services can be swapped without changing catalog contracts.
+  public func applyGeneratedMask(
+    _ mask: MaskDefinition,
+    assetID: UUID,
+    expectedRevision: UInt64
+  ) async {
+    await enqueueEditMutation { [weak self] in
+      await self?.performApplyGeneratedMask(
+        mask,
+        assetID: assetID,
+        expectedRevision: expectedRevision
+      )
+    }
+  }
+
   public func rotateClockwise() async {
     await enqueueEditMutation { [weak self] in await self?.performRotateClockwise() }
   }
@@ -713,6 +730,21 @@ public final class PhotoWorkspace {
       errorMessage = nil
     } catch {
       record(error, operation: "mask.save")
+    }
+  }
+
+  private func performApplyGeneratedMask(
+    _ mask: MaskDefinition,
+    assetID: UUID,
+    expectedRevision: UInt64
+  ) async {
+    guard let recipe = editableRecipe(operation: "apply local AI mask") else { return }
+    guard recipe.assetID == assetID, recipe.revision == expectedRevision else {
+      record(PhotoWorkspaceError.staleAIResult, operation: "mask.ai")
+      return
+    }
+    await performMaskMutation { masks in
+      masks + [mask]
     }
   }
 
@@ -1201,7 +1233,7 @@ public final class PhotoWorkspace {
   ) async {
     guard !assets.isEmpty else {
       record(
-        PhotoWorkspaceError.noSelection(operation: "(operation) export"),
+        PhotoWorkspaceError.noSelection(operation: "\(operation) export"),
         operation: "workspace.\(operation)"
       )
       return

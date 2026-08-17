@@ -36,6 +36,8 @@ targets:
         product: PhotoWorkflow
       - package: PhotoSuitePackage
         product: PhotoDomain
+      - package: PhotoSuitePackage
+        product: RenderCore
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.photosuite.PhotoSuite
