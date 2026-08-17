@@ -43,8 +43,9 @@ contains these tested components:
 - a catalog metadata inspector, MapKit GPS markers, AVFoundation device
   discovery, and native print routing.
 
-The interface can review local import selections with duplicate states, browse a
-catalog, relink a missing source after fingerprint validation, apply basic and
+The interface can review local import selections with duplicate states, choose
+Add, Copy, or Move transfer semantics, browse a catalog, relink one or many
+missing sources after fingerprint validation, apply basic and
 baseline Develop groups, author local mask graphs, crop and rotate, compare before
 and after, inspect the histogram and three-way colour grade, author versioned masks,
 edit catalog metadata, import and write the supported XMP sidecar fields, use
