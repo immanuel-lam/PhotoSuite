@@ -23,7 +23,8 @@ contains these tested components:
   for legacy empty RAW decoder pins;
 - durable ordered recipes for basic Develop controls, baseline tone,
   white-balance, transform, detail, optics, effects, calibration,
-  black-and-white, and HDR-intent operations; and
+  black-and-white, HDR-intent, and deterministic manual red-eye operations
+  for user-specified regions; and
 - atomic JPEG, PNG, HEIF, and TIFF delivery with tested resize, metadata,
   text-watermark, output-sharpening, filtered Library selection, and sequential
   batch-export options; and
@@ -42,18 +43,22 @@ baseline Develop groups, crop and rotate, compare before and after, inspect
 the histogram and three-way colour grade, author versioned masks, edit
 catalog metadata, and write JPEG, PNG, HEIF, or TIFF output through Deliver.
 Durable regular and smart collections plus photo stacks load from the catalog and
-can be created from the Library sidebar. Session collections remain temporary.
+can be created from the Library sidebar. Durable hierarchical keyword nodes and
+asset assignments, plus independent virtual-copy recipe history, are stored in
+the catalog and covered by migration and reopen tests. Session collections remain
+temporary.
 The baseline controls and mask contracts are pre-alpha workflow evidence;
 they are not a Lightroom-equivalent implementation.
 
 Mask data, authoring, duplicate/synchronise requests, stale-result validation,
 deterministic rasterisation, graph composition, masked exposure, and masked
-colour grading exist. Bounded deterministic clone and healing recipes are
-also available in the render core, but they are not texture-aware Lightroom
-equivalents. Apple Vision foreground, subject, and person selection is
-available offline; sky, object, background, landscape, real depth, denoise,
-super-resolution, red-eye, and generative functions remain incomplete. No
-proprietary or network-only model pack is bundled.
+colour grading exist. Bounded deterministic clone, healing, and manual red-eye
+recipes are also available in the render core, but they are not texture-aware
+or automatically detected Lightroom equivalents. Apple Vision foreground,
+subject, and person selection is available offline; sky, object, background,
+landscape, real depth, denoise, super-resolution, automatic eye detection, and
+generative functions remain incomplete. No proprietary or network-only model
+pack is bundled.
 A common-image preview fallback is available when a source is not accepted
 as RAW; this is not a supported-camera list. A licensed real RAW fixture is
 absent, so the real RAW fixture test is skipped.
@@ -62,13 +67,13 @@ The project has no Lightroom parity claim. Bayer/X-Trans raw-pixel decoding,
 LibRaw fallback, and complete DNG encoding remain incomplete. Physical tethered transfer,
 vendor camera SDK adapters, print templates and soft proofing, hosted
 publishing, plug-in hosting, Adobe migration, AI features beyond the
-verified Vision subset, healing, and production support for the full range of
-Lightroom formats remain incomplete.
-Batch metadata editing, embedded/sidecar XMP writing, and hierarchical
-keyword tools are also incomplete. Cloud services, mobile clients, and web
-editing are out of scope. There is no signed, notarized, reproducible, or
-published application release. Do not use this pre-alpha revision for
-production photographs.
+verified Vision subset, texture-aware retouching, and production support for
+the full range of Lightroom formats remain incomplete. Batch metadata editing,
+embedded/sidecar XMP writing, complete keyword-taxonomy authoring, and full
+virtual-copy workflow support are also incomplete. Cloud services, mobile
+clients, and web editing are out of scope. There is no signed, notarized,
+reproducible, or published application release. Do not use this pre-alpha
+revision for production photographs.
 
 The comparison baseline is Adobe Lightroom Classic 15.4.1. PhotoSuite
 does not claim feature, file-format, performance, workflow, plug-in, or
