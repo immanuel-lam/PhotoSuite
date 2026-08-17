@@ -119,6 +119,120 @@ final class DNGContainerReaderTests: XCTestCase {
     XCTAssertNil(inspection.metadata)
   }
 
+  func testMetadataWriterPatchesExistingASCIIFieldsAndLeavesSourceUnchanged() throws {
+    let directory = try DeterministicImageFixture.makeDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let sourceURL = directory.appendingPathComponent("source.dng")
+    let destinationURL = directory.appendingPathComponent("patched.dng")
+    let sourceData = makeDNGFixture(byteOrder: .littleEndian)
+    try sourceData.write(to: sourceURL)
+
+    let result = try DNGMetadataWriter().write(
+      DNGWriteRequest(
+        sourceURL: sourceURL,
+        destinationURL: destinationURL,
+        metadataPatch: DNGMetadataPatch(
+          make: "Open Photo",
+          model: "Pro Camera",
+          uniqueCameraModel: "Open Photo Pro Camera"
+        )
+      )
+    )
+
+    XCTAssertEqual(result.destinationURL, destinationURL)
+    XCTAssertEqual(result.contract, DNGWriterContract.metadataOnly)
+    XCTAssertEqual(try Data(contentsOf: sourceURL), sourceData)
+    XCTAssertEqual(try Data(contentsOf: destinationURL).count, sourceData.count)
+
+    let inspection = try DNGMetadataReader().inspect(
+      DNGInspectionRequest(sourceURL: destinationURL)
+    )
+    XCTAssertEqual(inspection.state, .valid)
+    XCTAssertEqual(inspection.metadata?.make, "Open Photo")
+    XCTAssertEqual(inspection.metadata?.model, "Pro Camera")
+    XCTAssertEqual(inspection.metadata?.uniqueCameraModel, "Open Photo Pro Camera")
+    XCTAssertEqual(inspection.metadata?.imageWidth, 4)
+    XCTAssertEqual(inspection.metadata?.imageHeight, 3)
+  }
+
+  func testMetadataWriterPatchesBigEndianASCIIFields() throws {
+    let directory = try DeterministicImageFixture.makeDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let sourceURL = directory.appendingPathComponent("big-endian-source.dng")
+    let destinationURL = directory.appendingPathComponent("big-endian-patched.dng")
+    try makeDNGFixture(byteOrder: .bigEndian).write(to: sourceURL)
+
+    _ = try DNGMetadataWriter().write(
+      DNGWriteRequest(
+        sourceURL: sourceURL,
+        destinationURL: destinationURL,
+        metadataPatch: DNGMetadataPatch(make: "Open Photo")
+      )
+    )
+
+    let inspection = try DNGMetadataReader().inspect(
+      DNGInspectionRequest(sourceURL: destinationURL)
+    )
+    XCTAssertEqual(inspection.state, .valid)
+    XCTAssertEqual(inspection.byteOrder, .bigEndian)
+    XCTAssertEqual(inspection.metadata?.make, "Open Photo")
+  }
+
+  func testMetadataWriterRejectsOffsetRewriteWhenValueDoesNotFitExistingField() throws {
+    let directory = try DeterministicImageFixture.makeDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let sourceURL = directory.appendingPathComponent("source.dng")
+    let destinationURL = directory.appendingPathComponent("too-long.dng")
+    try makeDNGFixture(byteOrder: .littleEndian).write(to: sourceURL)
+
+    XCTAssertThrowsError(
+      try DNGMetadataWriter().write(
+        DNGWriteRequest(
+          sourceURL: sourceURL,
+          destinationURL: destinationURL,
+          metadataPatch: DNGMetadataPatch(model: "This value cannot fit without moving any offsets")
+        )
+      )
+    ) { error in
+      XCTAssertEqual(
+        error as? DNGWriterError,
+        .metadataValueTooLong(tag: 272, maximumBytes: 12)
+      )
+    }
+    XCTAssertFalse(FileManager.default.fileExists(atPath: destinationURL.path))
+  }
+
+  func testMetadataWriterRejectsUnavailableTagAndSourceDestinationConflict() throws {
+    let directory = try DeterministicImageFixture.makeDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let sourceURL = directory.appendingPathComponent("source.dng")
+    try makeDNGFixture(byteOrder: .littleEndian).write(to: sourceURL)
+
+    XCTAssertThrowsError(
+      try DNGMetadataWriter().write(
+        DNGWriteRequest(
+          sourceURL: sourceURL,
+          destinationURL: directory.appendingPathComponent("missing-tag.dng"),
+          metadataPatch: DNGMetadataPatch(software: "PhotoSuite")
+        )
+      )
+    ) { error in
+      XCTAssertEqual(error as? DNGWriterError, .metadataTagUnavailable(305))
+    }
+
+    XCTAssertThrowsError(
+      try DNGMetadataWriter().write(
+        DNGWriteRequest(
+          sourceURL: sourceURL,
+          destinationURL: sourceURL,
+          metadataPatch: DNGMetadataPatch(make: "Other")
+        )
+      )
+    ) { error in
+      XCTAssertEqual(error as? DNGWriterError, .sourceDestinationConflict(sourceURL))
+    }
+  }
+
   func testRawCapabilityClassifiesDNGWithoutClaimingCIRAWDecoderVersion() async throws {
     let fixtureURL = FileManager.default.temporaryDirectory
       .appendingPathComponent("photosuite-(UUID().uuidString).dng")

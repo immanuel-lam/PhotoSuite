@@ -233,11 +233,10 @@ public enum DNGWriterFeature: String, Codable, Hashable, Sendable {
   case privateDataPreservation
 }
 
-/// A stable contract for a future DNG writer.
+/// A stable contract for the bounded DNG metadata writer.
 ///
-/// The current implementation exposes only a metadata-inspection reader. No
-/// writer claims to emit DNG pixels or rewrite a source file until a complete
-/// encoder passes the parser, corpus, and recovery gates.
+/// The writer can patch existing fixed-size ASCII fields without moving any
+/// offsets. It does not emit raw pixels or rewrite container structure.
 public struct DNGWriterContract: Codable, Hashable, Sendable {
   public let schemaVersion: UInt
   public let targetVersion: DNGVersion
@@ -265,6 +264,42 @@ public struct DNGWriterContract: Codable, Hashable, Sendable {
 
   public var supportsRawPixelEncoding: Bool {
     supportedFeatures.contains(.rawPixelEncoding)
+  }
+}
+
+/// Errors returned by the bounded metadata-only DNG writer.
+public enum DNGWriterError: Error, Equatable, LocalizedError, Sendable {
+  case invalidDestination(URL)
+  case sourceDestinationConflict(URL)
+  case unsupportedContainer(DNGContainerState)
+  case metadataTagUnavailable(UInt16)
+  case metadataValueTooLong(tag: UInt16, maximumBytes: UInt32)
+  case metadataValueNotASCII(UInt16)
+  case metadataValueContainsNUL(UInt16)
+  case metadataTagMalformed(UInt16)
+  case atomicWriteFailed(URL)
+
+  public var errorDescription: String? {
+    switch self {
+    case .invalidDestination(let url):
+      return "The DNG destination is invalid: \(url.lastPathComponent)."
+    case .sourceDestinationConflict(let url):
+      return "The DNG destination cannot replace the source: \(url.lastPathComponent)."
+    case .unsupportedContainer(let state):
+      return "The DNG container cannot be patched: \(state.rawValue)."
+    case .metadataTagUnavailable(let tag):
+      return "The DNG metadata tag is not present: \(tag)."
+    case .metadataValueTooLong(let tag, let maximumBytes):
+      return "The DNG metadata value for tag \(tag) must fit in \(maximumBytes) bytes."
+    case .metadataValueNotASCII(let tag):
+      return "The DNG metadata value for tag \(tag) must contain ASCII characters only."
+    case .metadataValueContainsNUL(let tag):
+      return "The DNG metadata value for tag \(tag) cannot contain a NUL character."
+    case .metadataTagMalformed(let tag):
+      return "The DNG metadata tag is malformed: \(tag)."
+    case .atomicWriteFailed(let url):
+      return "The patched DNG could not be written: \(url.lastPathComponent)."
+    }
   }
 }
 
