@@ -54,7 +54,7 @@ licensing will solve the distribution obligation.
 - A dependency that sends image content, catalog content, credentials,
   or telemetry to a network service by default.
 - A dependency that requires Electron, Mac Catalyst, Intel-only code, or
-  a macOS version below the supported baseline.
+  a minimum macOS version newer than 15.0.
 
 ## Required dependency record
 

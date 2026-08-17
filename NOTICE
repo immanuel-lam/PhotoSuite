@@ -5,8 +5,14 @@ PhotoSuite source files are licensed under the Mozilla Public License,
 version 2.0 (SPDX: MPL-2.0). The complete license text is in LICENSE.
 
 Copyright notices stay in their source files. This repository has no
-third-party source or binary dependencies at this revision. Therefore, no
-third-party attribution notice is required yet.
+third-party source or binary dependencies at this revision.
+
+This repository includes an adapted Contributor Covenant Code of Conduct,
+version 2.1, under the Creative Commons Attribution 4.0 International
+license (SPDX: CC-BY-4.0). The adaptation appears in
+CODE_OF_CONDUCT.md. Its source is
+https://www.contributor-covenant.org/version/2/1/code_of_conduct.html.
+The complete CC-BY-4.0 text is in LICENSES/CC-BY-4.0.txt.
 
 When a dependency, icon, font, sample, model, or other redistributed
 material is added, its copyright and license notices must be recorded in

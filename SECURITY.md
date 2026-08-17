@@ -9,8 +9,17 @@ development branch when an application exists.
 ## Report a vulnerability
 
 Do not publish an issue for a suspected vulnerability before a maintainer
-has assessed it. Use the repository hosting service's private security
-advisory function, when it is enabled. Include:
+has assessed it. When the public PhotoSuite repository exists and GitHub
+private vulnerability reporting is enabled, submit a private report at:
+
+https://github.com/immanuel-lam/PhotoSuite/security/advisories/new
+
+This URL will not accept reports until those conditions are met. No
+project security email is published. Until the private advisory route is
+available, do not disclose vulnerability details in a public issue,
+discussion, or pull request.
+
+Include:
 
 - affected revision or commit ID;
 - macOS version and Apple silicon model;
@@ -18,16 +27,12 @@ advisory function, when it is enabled. Include:
 - expected and actual security effect; and
 - a safe contact method for follow-up.
 
-No project security email is published yet. If a private advisory channel
-is unavailable, do not disclose exploit details in public channels.
-Ask a maintainer to publish a private reporting channel first.
-
 ## Handling expectations
 
-Maintainers will acknowledge a valid private report when a response
-channel exists, investigate it, and coordinate a fix before public
-disclosure where practical. No response-time, bounty, CVE, or release
-service level is promised at this stage.
+Maintainers will acknowledge a valid private report, investigate it, and
+coordinate a fix before public disclosure where practical. No
+response-time, bounty, CVE, or release service level is promised at this
+stage.
 
 ## Security boundaries
 

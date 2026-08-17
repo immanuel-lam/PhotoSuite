@@ -85,12 +85,15 @@ all resolver state is present:
 ```sh
 mkdir -p artifacts/sbom
 syft dir:. --config .syft.yaml
+shasum -a 256 artifacts/sbom/PhotoSuite.cdx.json \
+  artifacts/sbom/PhotoSuite.spdx.json > artifacts/sbom/SHA256SUMS
 ```
 
 This configuration is not evidence that `syft` is installed or that the
-command has run in this repository. The future CI job must validate the
-exact generator syntax for its pinned version and fail if either output
-or `SHA256SUMS` is missing.
+commands have run in this repository. Syft creates the two SBOM files;
+the separate `shasum` command creates `SHA256SUMS`. The future CI job
+must validate the exact generator syntax for its pinned version and fail
+if any required output is missing.
 
 ## Verification checklist
 

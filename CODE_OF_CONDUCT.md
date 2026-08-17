@@ -59,10 +59,17 @@ or acting as an appointed representative at an online or offline event.
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may
-be reported to a maintainer through a private channel published by the
-repository host. All complaints will be reviewed and investigated
-promptly and fairly.
+When the public PhotoSuite repository exists and GitHub private
+vulnerability reporting is enabled, report abusive, harassing, or other
+unacceptable behavior privately at:
+
+https://github.com/immanuel-lam/PhotoSuite/security/advisories/new
+
+This route will not accept reports until those conditions are met. No
+project conduct email is published. Until the private advisory route is
+available, do not disclose incident details in a public issue,
+discussion, or pull request. All valid private complaints will be
+reviewed and investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security
 of the reporter of any incident.
@@ -116,8 +123,11 @@ individuals.
 **Consequence**: A permanent ban from any sort of public interaction
 within the community.
 
-## Attribution
+## Attribution and license
 
 This Code of Conduct is adapted from the Contributor Covenant, version
 2.1, available at
 https://www.contributor-covenant.org/version/2/1/code_of_conduct.html.
+This adapted material is licensed under the Creative Commons Attribution
+4.0 International license (SPDX: CC-BY-4.0). The complete license text
+is in LICENSES/CC-BY-4.0.txt.
