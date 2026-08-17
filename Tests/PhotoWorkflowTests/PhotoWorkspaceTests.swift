@@ -691,6 +691,7 @@ final class PhotoWorkspaceTests: XCTestCase {
     let workspace = makeWorkspace(catalog: catalog, exporter: exporter)
     await workspace.reopen()
     let options = DeliverOptions(
+      format: .png,
       resize: .longEdge(2_048),
       metadata: .copyrightOnly,
       watermark: .text("PhotoSuite"),
@@ -714,6 +715,7 @@ final class PhotoWorkspaceTests: XCTestCase {
         outputSharpening: .screenStandard
       )
     )
+    XCTAssertEqual(request.format, .png)
     XCTAssertNil(workspace.lastError)
   }
 

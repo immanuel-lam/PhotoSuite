@@ -271,6 +271,7 @@ public protocol Codec: Sendable {
 
 public enum ExportFormat: Codable, Hashable, Sendable {
   case jpeg
+  case png
   case heif
   case tiff
   case unknown(String)
@@ -289,7 +290,7 @@ public enum ExportFormat: Codable, Hashable, Sendable {
     case .unknown(let value):
       try UnknownStringCodeCoding.encodeUnknown(
         value,
-        reservedValues: ["jpeg", "heif", "tiff"],
+        reservedValues: ["jpeg", "png", "heif", "tiff"],
         to: encoder
       )
     default:
@@ -300,6 +301,7 @@ public enum ExportFormat: Codable, Hashable, Sendable {
   private init(code: String) {
     switch code {
     case "jpeg": self = .jpeg
+    case "png": self = .png
     case "heif": self = .heif
     case "tiff": self = .tiff
     default: self = .unknown(code)
@@ -309,6 +311,7 @@ public enum ExportFormat: Codable, Hashable, Sendable {
   private var code: String {
     switch self {
     case .jpeg: "jpeg"
+    case .png: "png"
     case .heif: "heif"
     case .tiff: "tiff"
     case .unknown(let code): code
@@ -424,4 +427,29 @@ public struct ExportResult: Codable, Hashable, Sendable {
 
 public protocol Exporter: Sendable {
   func export(_ request: ExportRequest) async throws -> ExportResult
+}
+
+/// A deterministic sequence of independent export requests.
+///
+/// Each request is published atomically by the exporter. A batch can therefore
+/// contain outputs that already completed if a later request fails or is
+/// cancelled. Callers must treat `results` as the completed prefix.
+public struct BatchExportRequest: Codable, Hashable, Sendable {
+  public let requests: [ExportRequest]
+
+  public init(requests: [ExportRequest]) {
+    self.requests = requests
+  }
+}
+
+public struct BatchExportResult: Codable, Hashable, Sendable {
+  public let results: [ExportResult]
+
+  public init(results: [ExportResult]) {
+    self.results = results
+  }
+}
+
+public protocol BatchExporter: Sendable {
+  func export(_ request: BatchExportRequest) async throws -> BatchExportResult
 }

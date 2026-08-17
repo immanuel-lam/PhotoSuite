@@ -20,11 +20,14 @@ public enum RenderCoreError: Error, Equatable, LocalizedError, Sendable {
   case unsupportedExportFormat(String)
   case unsupportedOutputColorSpace(String)
   case invalidJPEGQuality(Double)
+  case invalidImageQuality(format: String, value: Double)
   case invalidExportResize(String)
   case invalidWatermark(String)
   case invalidDestination(URL)
   case sourceDestinationConflict(URL)
   case jpegEncodingFailed(URL)
+  case imageEncodingFailed(format: String, URL)
+  case duplicateBatchDestination(URL)
   case atomicWriteFailed(URL)
   case cleanupFailed(operation: String, primaryError: String, cleanupError: String)
   case renderFailed
@@ -63,6 +66,8 @@ public enum RenderCoreError: Error, Equatable, LocalizedError, Sendable {
       "The output color space is not supported: \(name)."
     case .invalidJPEGQuality(let quality):
       "The JPEG quality is invalid: \(quality)."
+    case .invalidImageQuality(let format, let value):
+      "The \(format.uppercased()) quality is invalid: \(value)."
     case .invalidExportResize(let details):
       "The export resize is invalid: \(details)."
     case .invalidWatermark(let details):
@@ -73,6 +78,10 @@ public enum RenderCoreError: Error, Equatable, LocalizedError, Sendable {
       "The export destination cannot replace the source image."
     case .jpegEncodingFailed(let url):
       "JPEG encoding failed for \(url.lastPathComponent)."
+    case .imageEncodingFailed(let format, let url):
+      "\(format.uppercased()) encoding failed for \(url.lastPathComponent)."
+    case .duplicateBatchDestination(let url):
+      "A batch contains the destination more than once: \(url.lastPathComponent)."
     case .atomicWriteFailed(let url):
       "The export could not be published to \(url.lastPathComponent)."
     case .cleanupFailed(let operation, let primaryError, let cleanupError):

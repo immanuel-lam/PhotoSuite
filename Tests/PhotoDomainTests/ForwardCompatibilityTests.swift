@@ -48,6 +48,7 @@ final class ForwardCompatibilityTests: XCTestCase {
       reservedCode: "rgba8"
     )
     try assertCollisionRoundTrip(ExportFormat.unknown("jpeg"), reservedCode: "jpeg")
+    try assertCollisionRoundTrip(ExportFormat.unknown("png"), reservedCode: "png")
     try assertCollisionRoundTrip(
       XPCResponseStatus.unknown("success"),
       reservedCode: "success"

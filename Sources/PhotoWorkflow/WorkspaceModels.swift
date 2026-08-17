@@ -241,6 +241,40 @@ public enum DeliverResize: Codable, Hashable, Sendable {
   case dimensions(width: Int, height: Int)
 }
 
+public enum DeliverFormat: String, Codable, CaseIterable, Hashable, Sendable {
+  case jpeg
+  case png
+  case heif
+  case tiff
+
+  public var title: String {
+    switch self {
+    case .jpeg: "JPEG"
+    case .png: "PNG"
+    case .heif: "HEIF"
+    case .tiff: "TIFF"
+    }
+  }
+
+  public var fileExtension: String {
+    switch self {
+    case .jpeg: "jpg"
+    case .png: "png"
+    case .heif: "heic"
+    case .tiff: "tiff"
+    }
+  }
+
+  public var exportFormat: ExportFormat {
+    switch self {
+    case .jpeg: .jpeg
+    case .png: .png
+    case .heif: .heif
+    case .tiff: .tiff
+    }
+  }
+}
+
 public enum DeliverMetadata: String, Codable, CaseIterable, Hashable, Sendable {
   case basic
   case copyrightOnly
@@ -261,21 +295,44 @@ public enum DeliverOutputSharpening: String, Codable, CaseIterable, Hashable, Se
 }
 
 public struct DeliverOptions: Codable, Hashable, Sendable {
+  public var format: DeliverFormat
   public var resize: DeliverResize
   public var metadata: DeliverMetadata
   public var watermark: DeliverWatermark
   public var outputSharpening: DeliverOutputSharpening
 
   public init(
+    format: DeliverFormat = .jpeg,
     resize: DeliverResize = .original,
     metadata: DeliverMetadata = .basic,
     watermark: DeliverWatermark = .none,
     outputSharpening: DeliverOutputSharpening = .none
   ) {
+    self.format = format
     self.resize = resize
     self.metadata = metadata
     self.watermark = watermark
     self.outputSharpening = outputSharpening
+  }
+
+  public init(from decoder: any Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    format = try container.decodeIfPresent(DeliverFormat.self, forKey: .format) ?? .jpeg
+    resize = try container.decode(DeliverResize.self, forKey: .resize)
+    metadata = try container.decode(DeliverMetadata.self, forKey: .metadata)
+    watermark = try container.decode(DeliverWatermark.self, forKey: .watermark)
+    outputSharpening = try container.decode(
+      DeliverOutputSharpening.self,
+      forKey: .outputSharpening
+    )
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case format
+    case resize
+    case metadata
+    case watermark
+    case outputSharpening
   }
 
   public var unsupportedFeatures: [String] {
@@ -341,7 +398,7 @@ public enum PhotoWorkspaceError: Error, Equatable, LocalizedError, Sendable {
     case .unknownOperationsBlockEditing:
       "This recipe contains edits from a newer version. PhotoSuite did not change it."
     case .unsupportedDeliverOptions(let features):
-      "The current JPEG engine does not support: \(features.joined(separator: ", "))."
+      "The current image engine does not support: \(features.joined(separator: ", "))."
     case .operationFailed(let operation, let message): "\(operation): \(message)"
     }
   }

@@ -43,6 +43,8 @@ struct SystemAtomicFilePublisher: AtomicFilePublishing {
   }
 }
 
+/// The default ImageIO-backed exporter. The historic type name is retained for
+/// source compatibility; it now supports JPEG, PNG, HEIF, and TIFF requests.
 public struct AtomicJPEGExporter: Exporter, Sendable {
   private let decoder: AppleRawDecoder
   private let publisher: any AtomicFilePublishing
@@ -69,11 +71,41 @@ public struct AtomicJPEGExporter: Exporter, Sendable {
   }
 
   public func export(_ request: ExportRequest) async throws -> ExportResult {
-    try await decoder.exportJPEG(
+    try await decoder.exportImage(
       request,
       publisher: publisher,
       publicationGate: publicationGate,
       temporaryFileRemover: temporaryFileRemover
     )
+  }
+}
+
+/// Executes export requests in order. Each output uses the wrapped exporter's
+/// atomic publication boundary. Cancellation is checked before every request.
+public struct AtomicBatchExporter: BatchExporter, Sendable {
+  private let exporter: any Exporter
+
+  public init(exporter: any Exporter) {
+    self.exporter = exporter
+  }
+
+  public func export(_ request: BatchExportRequest) async throws -> BatchExportResult {
+    var destinations: Set<URL> = []
+    var results: [ExportResult] = []
+    results.reserveCapacity(request.requests.count)
+
+    for exportRequest in request.requests {
+      let destination = exportRequest.destinationURL.standardizedFileURL.resolvingSymlinksInPath()
+      guard destinations.insert(destination).inserted else {
+        throw RenderCoreError.duplicateBatchDestination(exportRequest.destinationURL)
+      }
+    }
+
+    for exportRequest in request.requests {
+      try Task.checkCancellation()
+      results.append(try await exporter.export(exportRequest))
+    }
+
+    return BatchExportResult(results: results)
   }
 }

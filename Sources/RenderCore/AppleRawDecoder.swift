@@ -306,6 +306,201 @@ public actor AppleRawDecoder: RawDecoder {
     return result
   }
 
+  /// Exports the same compiled edit graph to the lossless and native image
+  /// containers supported by ImageIO. JPEG remains on its existing Core Image
+  /// writer so its established metadata and cancellation behaviour stay
+  /// unchanged.
+  func exportImage(
+    _ request: ExportRequest,
+    publisher: any AtomicFilePublishing,
+    publicationGate: any ExportPublicationGating,
+    temporaryFileRemover: any TemporaryFileRemoving
+  ) async throws -> ExportResult {
+    switch request.format {
+    case .jpeg:
+      return try await exportJPEG(
+        request,
+        publisher: publisher,
+        publicationGate: publicationGate,
+        temporaryFileRemover: temporaryFileRemover
+      )
+    case .png, .heif, .tiff:
+      break
+    case .unknown:
+      throw RenderCoreError.unsupportedExportFormat(exportFormatName(request.format))
+    }
+
+    try Task.checkCancellation()
+    guard request.destinationURL.isFileURL else {
+      throw RenderCoreError.invalidDestination(request.destinationURL)
+    }
+    if case .heif = request.format, let quality = request.quality {
+      guard quality.isFinite, (0...1).contains(quality) else {
+        throw RenderCoreError.invalidImageQuality(format: "HEIF", value: quality)
+      }
+    }
+
+    let resolvedSource = request.sourceURL.standardizedFileURL.resolvingSymlinksInPath()
+    let resolvedDestination = request.destinationURL.standardizedFileURL.resolvingSymlinksInPath()
+    guard resolvedSource != resolvedDestination else {
+      throw RenderCoreError.sourceDestinationConflict(request.sourceURL)
+    }
+
+    var isDirectory: ObjCBool = false
+    let destinationDirectory = request.destinationURL.deletingLastPathComponent()
+    guard
+      FileManager.default.fileExists(
+        atPath: destinationDirectory.path,
+        isDirectory: &isDirectory
+      ),
+      isDirectory.boolValue
+    else {
+      throw RenderCoreError.invalidDestination(request.destinationURL)
+    }
+
+    let temporaryURL = destinationDirectory.appendingPathComponent(
+      ".\(request.destinationURL.lastPathComponent).photosuite-tmp-\(UUID().uuidString)"
+    )
+    let encodedData: Data
+    do {
+      encodedData = try await encodeImage(
+        request,
+        temporaryURL: temporaryURL,
+        publisher: publisher,
+        publicationGate: publicationGate
+      )
+    } catch let primaryError {
+      try removeTemporaryFileIfPresent(
+        at: temporaryURL,
+        remover: temporaryFileRemover,
+        primaryError: primaryError
+      )
+      throw primaryError
+    }
+    try removeTemporaryFileIfPresent(
+      at: temporaryURL,
+      remover: temporaryFileRemover,
+      primaryError: nil
+    )
+
+    return ExportResult(
+      derivative: DurableDerivative(
+        schemaVersion: 1,
+        assetID: request.recipe.assetID,
+        recipeRevision: request.recipe.revision,
+        kind: .export,
+        outputURL: request.destinationURL,
+        typeIdentifier: exportTypeIdentifier(request.format),
+        fingerprint: fingerprint(for: encodedData),
+        createdAt: Date()
+      )
+    )
+  }
+
+  private func encodeImage(
+    _ request: ExportRequest,
+    temporaryURL: URL,
+    publisher: any AtomicFilePublishing,
+    publicationGate: any ExportPublicationGating
+  ) async throws -> Data {
+    var image = try compiledImage(sourceURL: request.sourceURL, recipe: request.recipe)
+    image = try applyingExportResize(request.options.resize, to: image)
+    image = try applyingOutputSharpening(request.options.outputSharpening, to: image)
+    image = try applyingWatermark(request.options.watermark, to: image)
+    try Task.checkCancellation()
+
+    let outputExtent = image.extent.integral
+    let outputImage: CIImage
+    if case .heif = request.format {
+      let black = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 1))
+        .cropped(to: outputExtent)
+      outputImage = image.composited(over: black).cropped(to: outputExtent)
+    } else {
+      outputImage = image.cropped(to: outputExtent)
+    }
+    guard
+      let cgImage = context.createCGImage(
+        outputImage,
+        from: outputExtent,
+        format: .RGBA8,
+        colorSpace: sRGBColorSpace
+      ),
+      let destination = CGImageDestinationCreateWithURL(
+        temporaryURL as CFURL,
+        exportTypeIdentifier(request.format) as CFString,
+        1,
+        nil
+      )
+    else {
+      throw RenderCoreError.imageEncodingFailed(
+        format: exportFormatName(request.format),
+        request.destinationURL
+      )
+    }
+
+    var properties = exportMetadataProperties(
+      policy: request.options.metadata,
+      sourceURL: request.sourceURL,
+      outputExtent: outputExtent
+    )
+    if case .heif = request.format, let quality = request.quality {
+      properties[kCGImageDestinationLossyCompressionQuality as String] = quality
+    }
+    CGImageDestinationAddImage(destination, cgImage, properties as CFDictionary)
+    guard CGImageDestinationFinalize(destination) else {
+      throw RenderCoreError.imageEncodingFailed(
+        format: exportFormatName(request.format),
+        request.destinationURL
+      )
+    }
+    try Task.checkCancellation()
+
+    guard
+      let temporaryData = try? Data(contentsOf: temporaryURL),
+      !temporaryData.isEmpty,
+      let imageSource = CGImageSourceCreateWithData(temporaryData as CFData, nil),
+      CGImageSourceGetType(imageSource) as String? == exportTypeIdentifier(request.format)
+    else {
+      throw RenderCoreError.imageEncodingFailed(
+        format: exportFormatName(request.format),
+        request.destinationURL
+      )
+    }
+    try Task.checkCancellation()
+    await publicationGate.waitBeforePublication()
+    try Task.checkCancellation()
+    do {
+      try publisher.publish(
+        temporaryURL: temporaryURL,
+        destinationURL: request.destinationURL
+      )
+    } catch {
+      throw RenderCoreError.atomicWriteFailed(request.destinationURL)
+    }
+    return temporaryData
+  }
+
+  private func exportTypeIdentifier(_ format: ExportFormat) -> String {
+    switch format {
+    case .jpeg: UTType.jpeg.identifier
+    case .png: UTType.png.identifier
+    case .heif: UTType.heic.identifier
+    case .tiff: UTType.tiff.identifier
+    case .unknown: "public.data"
+    }
+  }
+
+  private func fingerprint(for data: Data) -> SourceFingerprint? {
+    let digest = SHA256.hash(data: data)
+      .map { String(format: "%02x", $0) }
+      .joined()
+    return SourceFingerprint(
+      sha256: digest,
+      byteCount: UInt64(data.count),
+      modificationDate: nil
+    )
+  }
+
   private func encodeAndPublishJPEG(
     _ opaqueImage: CIImage,
     request: ExportRequest,
@@ -611,6 +806,7 @@ public actor AppleRawDecoder: RawDecoder {
   private func exportFormatName(_ format: ExportFormat) -> String {
     switch format {
     case .jpeg: "jpeg"
+    case .png: "png"
     case .heif: "heif"
     case .tiff: "tiff"
     case .unknown(let value): value

@@ -612,9 +612,9 @@ private struct DeliverySettings: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 24) {
         VStack(alignment: .leading, spacing: 4) {
-          Text("JPEG Export")
+          Text("Image Export")
             .font(.title2.weight(.bold))
-          Text("A standard sRGB copy from the current edit.")
+          Text("A colour-managed copy from the current edit.")
             .font(.callout)
             .foregroundStyle(.secondary)
         }
@@ -632,6 +632,11 @@ private struct DeliverySettings: View {
         }
 
         SettingsSection(title: "OUTPUT") {
+          Picker("Format", selection: $workspace.deliverOptions.format) {
+            ForEach(DeliverFormat.allCases, id: \.self) { format in
+              Text(format.title).tag(format)
+            }
+          }
           LabeledContent("Color space", value: "sRGB")
           VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -679,7 +684,7 @@ private struct DeliverySettings: View {
 
         if !workspace.deliverOptions.unsupportedFeatures.isEmpty {
           Label(
-            "Not available in the current JPEG engine: \(workspace.deliverOptions.unsupportedFeatures.joined(separator: ", ")).",
+            "Not available in the current image engine: \(workspace.deliverOptions.unsupportedFeatures.joined(separator: ", ")).",
             systemImage: "info.circle"
           )
           .font(.caption)
@@ -694,7 +699,11 @@ private struct DeliverySettings: View {
             } else {
               Image(systemName: "square.and.arrow.up")
             }
-            Text(workspace.isExporting ? "Exporting…" : "Export JPEG…")
+            Text(
+              workspace.isExporting
+                ? "Exporting…"
+                : "Export \(workspace.deliverOptions.format.title)…"
+            )
             Spacer()
           }
           .frame(maxWidth: .infinity)

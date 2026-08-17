@@ -86,17 +86,29 @@ struct ContentView: View {
 
   private func presentExportPanel() {
     let panel = NSSavePanel()
-    panel.title = "Export JPEG"
-    panel.allowedContentTypes = [.jpeg]
+    let format = workspace.deliverOptions.format
+    panel.title = "Export \(format.title)"
+    panel.allowedContentTypes = [format.contentType]
     panel.canCreateDirectories = true
     panel.isExtensionHidden = false
     let baseName = workspace.selectedAsset?.sourceURL.deletingPathExtension().lastPathComponent
-    panel.nameFieldStringValue = "\(baseName ?? "Photo")-edited.jpg"
+    panel.nameFieldStringValue = "\(baseName ?? "Photo")-edited.\(format.fileExtension)"
     panel.begin { response in
       guard response == .OK, let destination = panel.url else { return }
       Task { @MainActor in
         await workspace.exportJPEG(to: destination, quality: jpegQuality)
       }
+    }
+  }
+}
+
+extension DeliverFormat {
+  fileprivate var contentType: UTType {
+    switch self {
+    case .jpeg: .jpeg
+    case .png: .png
+    case .heif: .heic
+    case .tiff: .tiff
     }
   }
 }

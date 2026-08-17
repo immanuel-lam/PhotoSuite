@@ -857,7 +857,7 @@ public final class PhotoWorkspace {
             sourceURL: url,
             recipe: recipe,
             destinationURL: destinationURL,
-            format: .jpeg,
+            format: options.format.exportFormat,
             quality: quality,
             options: options.exportOptions
           )

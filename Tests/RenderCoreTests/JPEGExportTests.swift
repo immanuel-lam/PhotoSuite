@@ -475,10 +475,10 @@ final class JPEGExportTests: XCTestCase {
         sourceURL: fixture.source,
         recipe: makeRecipe(),
         destinationURL: destination,
-        format: .heif,
+        format: .unknown("avif"),
         quality: 0.9
       ),
-      expected: .unsupportedExportFormat("heif")
+      expected: .unsupportedExportFormat("avif")
     )
     await assertExportError(
       exporter,
