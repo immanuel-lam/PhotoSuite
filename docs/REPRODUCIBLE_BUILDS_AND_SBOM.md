@@ -3,11 +3,12 @@
 ## Status
 
 The public pre-alpha CI builds an unsigned debug application and tests the
-native catalog and render cores. A successful public CI run exists for commit
-[`126ee851bf9370837c1f783afa1e8daa65dfa27b`](https://github.com/immanuel-lam/PhotoSuite/actions/runs/32036892454)
-on 17 August 2026. It proves that the earlier CI configuration completed on a
-macOS 15 Arm64 runner. It does not prove release reproducibility, signing, or
-notarization.
+native catalog, render, and early workflow code. The latest recorded public
+success is commit
+[`bff9a3045361d1d854355d7dd5eed09723af1f34`](https://github.com/immanuel-lam/PhotoSuite/actions/runs/32037662134)
+on 17 August 2026. It proves that the earlier unsigned-build configuration
+completed on a macOS 15 Arm64 runner. It does not prove release
+reproducibility, signing, notarization, or installed-artifact behaviour.
 
 CI now also validates the checked-in SBOM generator contract and runs a pinned
 Syft generator. It creates CycloneDX JSON, SPDX JSON, and `SHA256SUMS` in the
@@ -15,6 +16,24 @@ job workspace, but does not upload or publish them. No public CI result has yet
 recorded this SBOM step. No independent clean-build comparison has been
 recorded. Therefore, PhotoSuite does not claim that builds are reproducible and
 does not publish an SBOM artifact.
+
+## Public CI evidence
+
+Use a public Actions result only for the exact commit and completed steps that
+it displays. The recorded success above predates the checked-in SBOM workflow,
+so it is not SBOM evidence. A future public result can provide pre-alpha CI
+evidence only after it completes all of these steps for the reviewed commit:
+
+1. Validate workflow contract.
+2. Test CI verification script.
+3. Test SBOM generation script.
+4. Install pinned XcodeGen and Syft tools.
+5. Test and build the unsigned arm64 application.
+6. Generate and validate the workspace SBOM.
+
+The workflow has read-only repository permissions and does not upload an
+artifact. A passing public CI result is not a downloadable build, release
+artifact, signed binary, notarization result, or reproducibility proof.
 
 ## Reproducible-build objective
 
@@ -98,8 +117,9 @@ local repository path. The reproducible invocation is:
 scripts/ci/generate-sbom.sh artifacts/sbom
 ```
 
-The script makes the command sequence and checksum-file order deterministic.
-It does not prove that Syft output is byte-for-byte reproducible across
+The script makes the command sequence, source identity, generation metadata,
+and checksum-file order deterministic for one checked-out commit. It does not
+prove that Syft output or the application is byte-for-byte reproducible across
 machines. A release job must record the Syft version, retain the generated
 files, and compare independent clean generation results before such a claim.
 
