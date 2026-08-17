@@ -152,6 +152,9 @@ struct DevelopInspector: View {
         BaselineDevelopControls(workspace: workspace)
 
         Divider()
+        MaskControls(workspace: workspace)
+
+        Divider()
         AIModelControls()
 
         Divider()

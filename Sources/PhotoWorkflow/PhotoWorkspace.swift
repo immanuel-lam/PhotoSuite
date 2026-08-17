@@ -58,6 +58,13 @@ public final class PhotoWorkspace {
     currentRecipe?.operations.filter { Self.developFamily($0) != nil } ?? []
   }
 
+  /// Masks are durable recipe data. Their graph payload remains opaque to the
+  /// catalog, which keeps older recipes forward compatible while the current
+  /// UI can author the version-one graph contracts.
+  public var currentMasks: [MaskDefinition] {
+    currentRecipe?.masks ?? []
+  }
+
   public var filteredAssets: [PhotoAsset] {
     let collectionAssetIDs = activeCollectionID.flatMap { collectionID in
       collections.first { $0.id == collectionID }.map { Set($0.assetIDs) }
@@ -385,6 +392,60 @@ public final class PhotoWorkspace {
     }
   }
 
+  public func addMask(kind: MaskKind, name: String? = nil) async {
+    await enqueueEditMutation { [weak self] in
+      await self?.performAddMask(kind: kind, name: name)
+    }
+  }
+
+  public func removeMask(id: UUID) async {
+    await enqueueEditMutation { [weak self] in
+      await self?.performMaskMutation { masks in
+        let updated = masks.filter { $0.id != id }
+        return updated == masks ? nil : updated
+      }
+    }
+  }
+
+  public func toggleMaskInverted(id: UUID) async {
+    await enqueueEditMutation { [weak self] in
+      await self?.performMaskMutation { masks in
+        guard let index = masks.firstIndex(where: { $0.id == id }) else { return nil }
+        let mask = masks[index]
+        var updatedMasks = masks
+        updatedMasks[index] = MaskDefinition(
+          id: mask.id,
+          schemaVersion: mask.schemaVersion,
+          kind: mask.kind,
+          name: mask.name,
+          isInverted: !mask.isInverted,
+          payload: mask.payload
+        )
+        return updatedMasks
+      }
+    }
+  }
+
+  public func replaceMaskGraph(id: UUID, graph: MaskGraphV1) async {
+    await enqueueEditMutation { [weak self] in
+      await self?.performMaskMutation { masks in
+        guard let index = masks.firstIndex(where: { $0.id == id }) else { return nil }
+        let mask = masks[index]
+        guard
+          let updated = try? MaskDefinition(
+            id: mask.id,
+            kind: mask.kind,
+            name: mask.name,
+            graph: graph
+          )
+        else { return nil }
+        var updatedMasks = masks
+        updatedMasks[index] = updated
+        return updatedMasks
+      }
+    }
+  }
+
   public func rotateClockwise() async {
     await enqueueEditMutation { [weak self] in await self?.performRotateClockwise() }
   }
@@ -481,6 +542,52 @@ public final class PhotoWorkspace {
     if !(await saveOperations(canonicalized(operations))) {
       undoStack = oldUndo
       redoStack = oldRedo
+    }
+  }
+
+  private func performAddMask(kind: MaskKind, name: String?) async {
+    guard editableRecipe(operation: "add mask") != nil else { return }
+    guard
+      let mask = try? MaskDefinition(
+        kind: kind,
+        name: name,
+        graph: MaskGraphV1()
+      )
+    else {
+      record(
+        PhotoWorkspaceError.operationFailed(
+          operation: "add mask",
+          message: "The mask definition could not be encoded."
+        ),
+        operation: "mask"
+      )
+      return
+    }
+    await performMaskMutation { masks in masks + [mask] }
+  }
+
+  private func performMaskMutation(
+    _ mutation: ([MaskDefinition]) -> [MaskDefinition]?
+  ) async {
+    guard let recipe = editableRecipe(operation: "mask") else { return }
+    guard let masks = mutation(recipe.masks), masks != recipe.masks else { return }
+    let updatedRecipe = EditRecipe(
+      assetID: recipe.assetID,
+      revision: recipe.revision + 1,
+      date: now(),
+      pins: recipe.pins,
+      operations: recipe.operations,
+      masks: masks
+    )
+    do {
+      currentRecipe = try await catalog.saveRecipe(
+        CatalogRecipeSaveRequest(recipe: updatedRecipe)
+      ).recipe
+      await refreshPreview()
+      lastError = nil
+      errorMessage = nil
+    } catch {
+      record(error, operation: "mask.save")
     }
   }
 

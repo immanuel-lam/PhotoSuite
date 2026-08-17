@@ -288,6 +288,44 @@ final class PhotoWorkspaceTests: XCTestCase {
     )
   }
 
+  func testMaskAuthoringPersistsVersionedGraphAndSupportsInvertAndRemove() async throws {
+    let asset = makeAsset(name: "mask.jpg")
+    let initial = makeRecipe(assetID: asset.id)
+    let catalog = CatalogSpy(assets: [asset], recipes: [asset.id: initial])
+    let workspace = makeWorkspace(catalog: catalog)
+    await workspace.reopen()
+
+    await workspace.addMask(kind: .brush, name: "Brush mask")
+    let mask = try XCTUnwrap(workspace.currentMasks.first)
+    let point = try XCTUnwrap(MaskPointV1(x: 0.5, y: 0.5))
+    let sample = try XCTUnwrap(MaskBrushSampleV1(point: point, pressure: 1))
+    let brush = try XCTUnwrap(
+      BrushMaskV1(samples: [sample], radius: 0.2, feather: 0.4, flow: 1)
+    )
+    let graph = MaskGraphV1(
+      components: [
+        MaskGraphComponentV1(
+          id: UUID(),
+          operation: .add,
+          primitive: .brush(brush)
+        )
+      ]
+    )
+
+    await workspace.replaceMaskGraph(id: mask.id, graph: graph)
+    await workspace.toggleMaskInverted(id: mask.id)
+
+    let updated = try XCTUnwrap(workspace.currentMasks.first)
+    XCTAssertTrue(updated.isInverted)
+    XCTAssertEqual(updated.schemaVersion, 1)
+    XCTAssertEqual(try updated.decodeGraphPayload(), .version1(graph))
+    XCTAssertEqual(workspace.currentRecipe?.revision, 3)
+
+    await workspace.removeMask(id: mask.id)
+    XCTAssertTrue(workspace.currentMasks.isEmpty)
+    XCTAssertEqual(workspace.currentRecipe?.revision, 4)
+  }
+
   func testNewPreviewCancelsAndSuppressesStalePreview() async throws {
     let asset = makeAsset(name: "preview.jpg")
     let initial = makeRecipe(assetID: asset.id)
