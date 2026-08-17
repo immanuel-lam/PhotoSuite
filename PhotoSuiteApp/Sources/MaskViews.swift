@@ -54,7 +54,7 @@ struct MaskControls: View {
         }
 
         Text(
-          "Brush, gradient, colour, luminance, and depth graphs are stored in the recipe. Rasterisation and model-generated selections require a verified local model pack."
+          "Brush, gradient, colour, luminance, and depth graphs are stored in the recipe and rasterised locally. Model-generated selections require a verified local model pack."
         )
         .font(.caption2)
         .foregroundStyle(.tertiary)
