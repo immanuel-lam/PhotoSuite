@@ -78,6 +78,8 @@ struct ContentView: View {
     case .deliver:
       DeliverView(workspace: workspace, quality: $jpegQuality) {
         workspace.isChoosingExportDestination = true
+      } chooseBatchDestination: {
+        presentBatchExportPanel()
       }
     case .workspace:
       ProfessionalWorkspaceView(workspace: workspace)
@@ -97,6 +99,22 @@ struct ContentView: View {
       guard response == .OK, let destination = panel.url else { return }
       Task { @MainActor in
         await workspace.exportJPEG(to: destination, quality: jpegQuality)
+      }
+    }
+  }
+
+  private func presentBatchExportPanel() {
+    let panel = NSOpenPanel()
+    panel.title = "Choose Batch Export Folder"
+    panel.prompt = "Export Here"
+    panel.canChooseFiles = false
+    panel.canChooseDirectories = true
+    panel.canCreateDirectories = true
+    panel.allowsMultipleSelection = false
+    panel.begin { response in
+      guard response == .OK, let destination = panel.url else { return }
+      Task { @MainActor in
+        await workspace.exportBatch(to: destination, quality: jpegQuality)
       }
     }
   }

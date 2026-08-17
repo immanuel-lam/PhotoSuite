@@ -506,6 +506,73 @@ final class PhotoWorkspaceTests: XCTestCase {
     XCTAssertNotNil(workspace.lastExport)
   }
 
+  func testBatchExportUsesFilteredAssetsLatestRecipesAndBalancesSourceAccess() async throws {
+    let first = makeAsset(name: "first.jpg", rating: 4)
+    let second = makeAsset(name: "second.jpg", rating: 3)
+    let hidden = makeAsset(name: "hidden.jpg", rating: 1)
+    let catalog = CatalogSpy(
+      assets: [first, second, hidden],
+      recipes: [
+        first.id: makeRecipe(assetID: first.id, revision: 2),
+        second.id: makeRecipe(assetID: second.id, revision: 5),
+        hidden.id: makeRecipe(assetID: hidden.id, revision: 8),
+      ]
+    )
+    let access = SourceAccessSpy()
+    let exporter = ExporterSpy(access: access)
+    let workspace = makeWorkspace(catalog: catalog, exporter: exporter, access: access)
+    await workspace.reopen()
+    workspace.smartFilter = LibrarySmartFilter(minimumRating: 3)
+
+    let destination = URL(fileURLWithPath: "/tmp/photosuite-batch")
+    await workspace.exportBatch(to: destination, quality: 0.82)
+
+    let requests = await exporter.requests()
+    XCTAssertEqual(requests.map(\.recipe.assetID), [first.id, second.id])
+    XCTAssertEqual(requests.map(\.recipe.revision), [2, 5])
+    XCTAssertEqual(
+      requests.map { $0.destinationURL.path },
+      [
+        "/tmp/photosuite-batch/first.jpg",
+        "/tmp/photosuite-batch/second.jpg",
+      ]
+    )
+    XCTAssertEqual(requests.map(\.quality), [0.82, 0.82])
+    XCTAssertEqual(workspace.lastBatchExports.count, 2)
+    XCTAssertNil(workspace.lastError)
+    let activeAccessCount = await access.activeAccessCount()
+    let accessObservations = await exporter.accessObservations()
+    XCTAssertEqual(activeAccessCount, 0)
+    XCTAssertEqual(accessObservations, [true, true])
+  }
+
+  func testBatchExportKeepsCompletedPrefixWhenLaterExportFails() async throws {
+    let first = makeAsset(name: "first.jpg")
+    let second = makeAsset(name: "second.jpg")
+    let catalog = CatalogSpy(
+      assets: [first, second],
+      recipes: [
+        first.id: makeRecipe(assetID: first.id),
+        second.id: makeRecipe(assetID: second.id),
+      ]
+    )
+    let access = SourceAccessSpy()
+    let exporter = ExporterSpy(access: access, failingRequestIndex: 1)
+    let workspace = makeWorkspace(catalog: catalog, exporter: exporter, access: access)
+    await workspace.reopen()
+
+    await workspace.exportBatch(
+      to: URL(fileURLWithPath: "/tmp/photosuite-batch-failure"),
+      quality: 0.9
+    )
+
+    XCTAssertEqual(workspace.lastBatchExports.count, 1)
+    XCTAssertEqual(workspace.lastExport, workspace.lastBatchExports.first)
+    XCTAssertNotNil(workspace.lastError)
+    let activeAccessCount = await access.activeAccessCount()
+    XCTAssertEqual(activeAccessCount, 0)
+  }
+
   func testBookmarkFailureKeepsImportedAssetAndRevisionZeroRecipeVisibleAndMissing() async throws {
     let url = URL(fileURLWithPath: "/tmp/bookmark-failure.jpg")
     let catalog = CatalogSpy()
@@ -1200,16 +1267,24 @@ private actor ControllableRenderer: RenderEngine {
 
 private actor ExporterSpy: Exporter {
   private var request: ExportRequest?
+  private var recordedRequests: [ExportRequest] = []
   private var shouldFail = false
   private let access: SourceAccessSpy?
   private var accessWasActive = false
+  private var recordedAccessStates: [Bool] = []
+  private let failingRequestIndex: Int?
 
-  init(access: SourceAccessSpy? = nil) { self.access = access }
+  init(access: SourceAccessSpy? = nil, failingRequestIndex: Int? = nil) {
+    self.access = access
+    self.failingRequestIndex = failingRequestIndex
+  }
 
   func export(_ request: ExportRequest) async throws -> ExportResult {
     self.request = request
+    recordedRequests.append(request)
     if let access { accessWasActive = await access.isActive }
-    if shouldFail { throw TestError.export }
+    if let access { recordedAccessStates.append(await access.isActive) }
+    if shouldFail || failingRequestIndex == recordedRequests.count - 1 { throw TestError.export }
     return ExportResult(
       derivative: DurableDerivative(
         schemaVersion: 1,
@@ -1229,8 +1304,10 @@ private actor ExporterSpy: Exporter {
   }
 
   func lastRequest() -> ExportRequest? { request }
+  func requests() -> [ExportRequest] { recordedRequests }
   func failExports() { shouldFail = true }
   func wasAccessActive() -> Bool { accessWasActive }
+  func accessObservations() -> [Bool] { recordedAccessStates }
 }
 
 private actor AccessPhaseRecorder {

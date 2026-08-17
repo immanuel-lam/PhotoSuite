@@ -30,6 +30,8 @@ public final class PhotoWorkspace {
   public var proofMode = false
   public var showsBefore = false
   public var lastExport: DurableDerivative?
+  public var lastBatchExports: [DurableDerivative] = []
+  public var isBatchExporting = false
   public var collections: [LibraryCollection] = []
   public var stacks: [LibraryStack] = []
   public var smartFilter = LibrarySmartFilter()
@@ -973,6 +975,99 @@ public final class PhotoWorkspace {
     } catch {
       record(error, operation: "export")
     }
+  }
+
+  /// Exports every photograph visible in the current Library filter.
+  /// Each item is published atomically, and completed derivatives remain available if a later
+  /// item fails or the task is cancelled.
+  public func exportBatch(to destinationFolder: URL, quality: Double) async {
+    await exportBatch(to: destinationFolder, quality: quality, options: deliverOptions)
+  }
+
+  public func exportBatch(
+    to destinationFolder: URL,
+    quality: Double,
+    options: DeliverOptions
+  ) async {
+    lastBatchExports = []
+    lastExport = nil
+    lastError = nil
+    errorMessage = nil
+    guard options.unsupportedFeatures.isEmpty else {
+      record(
+        PhotoWorkspaceError.unsupportedDeliverOptions(options.unsupportedFeatures),
+        operation: "batch export"
+      )
+      return
+    }
+    let exportAssets = filteredAssets
+    guard !exportAssets.isEmpty else {
+      record(PhotoWorkspaceError.noSelection(operation: "batch export"), operation: "batch export")
+      return
+    }
+
+    isBatchExporting = true
+    defer { isBatchExporting = false }
+
+    do {
+      try FileManager.default.createDirectory(
+        at: destinationFolder,
+        withIntermediateDirectories: true
+      )
+      var completed: [DurableDerivative] = []
+      completed.reserveCapacity(exportAssets.count)
+
+      for asset in exportAssets {
+        try Task.checkCancellation()
+        let url = try await sourceAccess.resolve(asset)
+        let started = await sourceAccess.start(url)
+        do {
+          guard
+            let recipe = try await catalog.latestRecipe(
+              CatalogLatestRecipeRequest(assetID: asset.id)
+            ).recipe
+          else {
+            throw PhotoWorkspaceError.recipeMissing(asset.id)
+          }
+          let destinationURL = batchDestination(
+            for: asset,
+            folder: destinationFolder,
+            format: options.format
+          )
+          let result = try await exporter.export(
+            ExportRequest(
+              sourceURL: url,
+              recipe: recipe,
+              destinationURL: destinationURL,
+              format: options.format.exportFormat,
+              quality: quality,
+              options: options.exportOptions
+            )
+          )
+          if started { await sourceAccess.stop(url) }
+          completed.append(result.derivative)
+          lastBatchExports = completed
+          lastExport = completed.last
+        } catch {
+          if started { await sourceAccess.stop(url) }
+          throw error
+        }
+      }
+    } catch is CancellationError {
+      // User cancellation does not create an error banner.
+    } catch {
+      record(error, operation: "batch export")
+    }
+  }
+
+  private func batchDestination(
+    for asset: PhotoAsset,
+    folder: URL,
+    format: DeliverFormat
+  ) -> URL {
+    let rawName = URL(fileURLWithPath: asset.filename).deletingPathExtension().lastPathComponent
+    let baseName = rawName.isEmpty ? asset.id.uuidString : rawName
+    return folder.appendingPathComponent(baseName).appendingPathExtension(format.fileExtension)
   }
 
   private func saveOperations(_ operations: [EditOperation]) async -> Bool {

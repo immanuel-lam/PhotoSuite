@@ -26,6 +26,7 @@ enum ModernUIAccessibility {
   static let developInspector = "develop-inspector"
   static let adjustmentExposure = "adjustment-exposure"
   static let exportJPEGButton = "export-jpeg-button"
+  static let deliverBatchExportButton = "deliver-batch-export-button"
   static let precisionControlsSurface = "precision-controls-surface"
   static let deliverResizeToggle = "deliver-resize-toggle"
   static let deliverMetadataPicker = "deliver-metadata-picker"

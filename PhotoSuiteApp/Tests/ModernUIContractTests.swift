@@ -52,6 +52,7 @@ struct ModernUIContractTests {
     #expect(ModernUIAccessibility.developInspector == "develop-inspector")
     #expect(ModernUIAccessibility.adjustmentExposure == "adjustment-exposure")
     #expect(ModernUIAccessibility.exportJPEGButton == "export-jpeg-button")
+    #expect(ModernUIAccessibility.deliverBatchExportButton == "deliver-batch-export-button")
     #expect(ModernUIAccessibility.precisionControlsSurface == "precision-controls-surface")
     #expect(ModernUIAccessibility.deliverResizeToggle == "deliver-resize-toggle")
     #expect(ModernUIAccessibility.deliverMetadataPicker == "deliver-metadata-picker")

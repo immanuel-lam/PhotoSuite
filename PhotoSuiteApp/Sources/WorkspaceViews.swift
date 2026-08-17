@@ -535,6 +535,19 @@ struct DeliverView: View {
   @Bindable var workspace: PhotoWorkspace
   @Binding var quality: Double
   let chooseDestination: () -> Void
+  let chooseBatchDestination: () -> Void
+
+  init(
+    workspace: PhotoWorkspace,
+    quality: Binding<Double>,
+    chooseDestination: @escaping () -> Void,
+    chooseBatchDestination: @escaping () -> Void = {}
+  ) {
+    self.workspace = workspace
+    self._quality = quality
+    self.chooseDestination = chooseDestination
+    self.chooseBatchDestination = chooseBatchDestination
+  }
 
   var body: some View {
     Group {
@@ -544,7 +557,8 @@ struct DeliverView: View {
           DeliverySettings(
             workspace: workspace,
             quality: $quality,
-            chooseDestination: chooseDestination
+            chooseDestination: chooseDestination,
+            chooseBatchDestination: chooseBatchDestination
           )
           .frame(width: 410)
         }
@@ -608,6 +622,7 @@ private struct DeliverySettings: View {
   @Bindable var workspace: PhotoWorkspace
   @Binding var quality: Double
   let chooseDestination: () -> Void
+  let chooseBatchDestination: () -> Void
 
   var body: some View {
     ScrollView {
@@ -693,26 +708,57 @@ private struct DeliverySettings: View {
           .accessibilityIdentifier(ModernUIAccessibility.deliverUnsupportedOptions)
         }
 
-        Button(action: chooseDestination) {
-          HStack {
-            if workspace.isExporting {
+        HStack(spacing: 10) {
+          Button(action: chooseDestination) {
+            HStack {
+              if workspace.isExporting {
+                ProgressView().controlSize(.small)
+              } else {
+                Image(systemName: "square.and.arrow.up")
+              }
+              Text(
+                workspace.isExporting
+                  ? "Exporting…"
+                  : "Export \(workspace.deliverOptions.format.title)…"
+              )
+              Spacer()
+            }
+            .frame(maxWidth: .infinity)
+          }
+          .buttonStyle(.borderedProminent)
+          .controlSize(.large)
+          .disabled(
+            workspace.isExporting
+              || workspace.isBatchExporting
+              || !workspace.deliverOptions.unsupportedFeatures.isEmpty
+          )
+          .accessibilityIdentifier(ModernUIAccessibility.exportJPEGButton)
+
+          Button(action: chooseBatchDestination) {
+            if workspace.isBatchExporting {
               ProgressView().controlSize(.small)
             } else {
-              Image(systemName: "square.and.arrow.up")
+              Image(systemName: "square.stack.3d.up")
             }
-            Text(
-              workspace.isExporting
-                ? "Exporting…"
-                : "Export \(workspace.deliverOptions.format.title)…"
-            )
-            Spacer()
           }
-          .frame(maxWidth: .infinity)
+          .buttonStyle(.bordered)
+          .controlSize(.large)
+          .help("Export the visible Library set to a folder")
+          .accessibilityLabel("Export visible Library set")
+          .disabled(
+            workspace.isExporting
+              || workspace.isBatchExporting
+              || workspace.filteredAssets.isEmpty
+              || !workspace.deliverOptions.unsupportedFeatures.isEmpty
+          )
+          .accessibilityIdentifier(ModernUIAccessibility.deliverBatchExportButton)
         }
-        .buttonStyle(.borderedProminent)
-        .controlSize(.large)
-        .disabled(workspace.isExporting || !workspace.deliverOptions.unsupportedFeatures.isEmpty)
-        .accessibilityIdentifier(ModernUIAccessibility.exportJPEGButton)
+
+        if !workspace.lastBatchExports.isEmpty {
+          Text("Exported \(workspace.lastBatchExports.count) photographs to the selected folder.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
 
         if let export = workspace.lastExport {
           Text("Exported to \(export.outputURL.path(percentEncoded: false))")

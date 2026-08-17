@@ -23,7 +23,8 @@ contains these tested components:
   white-balance, transform, detail, optics, effects, calibration,
   black-and-white, and HDR-intent operations; and
 - atomic JPEG, PNG, HEIF, and TIFF delivery with tested resize, metadata,
-  text-watermark, output-sharpening, and sequential batch-export options; and
+  text-watermark, output-sharpening, filtered Library selection, and sequential
+  batch-export options; and
 - PDF book, silent H.264 slideshow, and self-contained static HTML gallery
   output with atomic publication and cancellation cleanup; and
 - Apple Vision foreground, subject, and person masks with durable grayscale
