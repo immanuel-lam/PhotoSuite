@@ -2,11 +2,12 @@
 
 ## Status
 
-A native macOS scaffold and pre-alpha core build exist in this revision.
-PhotoSuite does not claim that builds are reproducible. It has no signed,
-notarized, or published release, and it does not publish an SBOM artifact.
+The public pre-alpha CI builds an unsigned debug application and tests the
+native catalog and render cores. It does not compare independent release
+builds, generate an SBOM, sign, or notarize. Therefore, PhotoSuite does not
+claim that builds are reproducible and does not publish an SBOM artifact.
 No independent clean-build comparison has been recorded. This document
-defines the required process before the first release candidate.
+defines the additional process required before the first release candidate.
 
 ## Reproducible-build objective
 
@@ -70,7 +71,7 @@ user's installed macOS.
 ## Proposed generation configuration
 
 The checked-in `.syft.yaml` configuration selects these stable output
-files. The scaffold must create `artifacts/sbom/` during CI and populate
+files. A future release job must create `artifacts/sbom/` and populate
 them from the release commit:
 
 ```text
@@ -92,9 +93,9 @@ shasum -a 256 artifacts/sbom/PhotoSuite.cdx.json \
 
 This configuration is not evidence that `syft` is installed or that the
 commands have run in this repository. Syft creates the two SBOM files;
-the separate `shasum` command creates `SHA256SUMS`. The future CI job
-must validate the exact generator syntax for its pinned version and fail
-if any required output is missing.
+the separate `shasum` command creates `SHA256SUMS`. The future release job
+must validate the exact generator syntax for its pinned version and fail if
+any required output is missing.
 
 ## Verification checklist
 
