@@ -157,7 +157,7 @@ struct DevelopInspector: View {
         DevelopPresetControls(workspace: workspace, name: $presetName)
 
         Divider()
-        MaskControls(workspace: workspace)
+        MaskAuthoringInspector(workspace: workspace)
 
         Divider()
         AIModelControls(workspace: workspace)
