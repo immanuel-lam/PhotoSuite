@@ -43,8 +43,8 @@ enum DeterministicImageFixture {
       generated.reserveCapacity(width * height * 4)
       for y in 0..<height {
         for x in 0..<width {
-          generated.append(UInt8(20 + x * 28))
-          generated.append(UInt8(24 + y * 36))
+          generated.append(UInt8((20 + x * 28) % 256))
+          generated.append(UInt8((24 + y * 36) % 256))
           generated.append(UInt8(16 + ((x + y) % 6) * 36))
           generated.append(255)
         }
@@ -160,6 +160,52 @@ enum DeterministicImageFixture {
       image,
       [kCGImagePropertyOrientation: 6] as CFDictionary
     )
+    guard CGImageDestinationFinalize(destination) else {
+      throw FixtureError.encodingFailed
+    }
+    return url
+  }
+
+  static func makeMetadataTIFF(
+    in directory: URL,
+    name: String = "metadata.tiff",
+    width: Int = 32,
+    height: Int = 24
+  ) throws -> URL {
+    let source = try makePNG(
+      in: directory, name: "metadata-pixels.png", width: width, height: height)
+    guard
+      let sourceImage = CGImageSourceCreateWithURL(source as CFURL, nil),
+      let image = CGImageSourceCreateImageAtIndex(sourceImage, 0, nil)
+    else {
+      throw FixtureError.imageCreationFailed
+    }
+    let url = directory.appendingPathComponent(name)
+    guard
+      let destination = CGImageDestinationCreateWithURL(
+        url as CFURL,
+        UTType.tiff.identifier as CFString,
+        1,
+        nil
+      )
+    else {
+      throw FixtureError.destinationCreationFailed
+    }
+    let properties: [CFString: Any] = [
+      kCGImagePropertyExifDictionary: [
+        kCGImagePropertyExifDateTimeOriginal: "2024:01:02 03:04:05",
+        kCGImagePropertyExifLensModel: "PhotoSuite Test Lens",
+      ],
+      kCGImagePropertyTIFFDictionary: [
+        kCGImagePropertyTIFFArtist: "PhotoSuite Test Artist",
+        kCGImagePropertyTIFFCopyright: "PhotoSuite Test Copyright",
+      ],
+      kCGImagePropertyGPSDictionary: [
+        kCGImagePropertyGPSLatitude: 33.86,
+        kCGImagePropertyGPSLatitudeRef: "S",
+      ],
+    ]
+    CGImageDestinationAddImage(destination, image, properties as CFDictionary)
     guard CGImageDestinationFinalize(destination) else {
       throw FixtureError.encodingFailed
     }

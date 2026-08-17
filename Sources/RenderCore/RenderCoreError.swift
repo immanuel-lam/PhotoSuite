@@ -63,6 +63,10 @@ public enum RenderCoreError: Error, Equatable, LocalizedError, Sendable {
       "The output color space is not supported: \(name)."
     case .invalidJPEGQuality(let quality):
       "The JPEG quality is invalid: \(quality)."
+    case .invalidExportResize(let details):
+      "The export resize is invalid: \(details)."
+    case .invalidWatermark(let details):
+      "The watermark is invalid: \(details)."
     case .invalidDestination(let url):
       "The export destination is invalid: \(url.lastPathComponent)."
     case .sourceDestinationConflict:
