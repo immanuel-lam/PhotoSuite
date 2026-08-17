@@ -7,10 +7,27 @@ SQLite. It is not an Electron or Mac Catalyst application.
 ## Current status
 
 This pre-alpha revision contains the project governance documents, a
-Swift package, and a compile-only native macOS application shell. It does
-not yet contain an import workflow, working catalog, image renderer,
-export function, or usable photo-editing interface. It is not ready to
-distribute or use for photographs.
+Swift package, and a native macOS application scaffold that builds. It
+also contains these tested, non-user-facing core components:
+
+- PhotoDomain contracts;
+- a SQLite catalog with migrations, search, jobs, security-scoped
+  bookmarks, backups, and reopen tests;
+- a Core Image and Metal render core;
+- common image decoding and Apple-supported RAW decoding when
+  `CIRAWFilter` accepts the source;
+- an ordered edit graph for exposure, tone, crop, and rotation, with
+  bounded previews; and
+- atomic sRGB JPEG export.
+
+These components are not integrated into a usable import or editing
+interface. That integration is planned for Task 6. A licensed real RAW
+fixture is not present in this repository, so a real RAW fixture test is
+skipped. The project has no Lightroom parity claim, and it does not yet
+implement masks, AI functions, tethering, print or proof workflows,
+delivery extras beyond JPEG export, or other Lightroom workflow features.
+There is no signed, notarized, reproducible, or published release. Do not
+use this pre-alpha revision for photographs.
 
 The comparison baseline is Adobe Lightroom Classic 15.4.1. PhotoSuite
 does not claim feature, file-format, performance, workflow, plug-in, or
@@ -28,12 +45,12 @@ service compatibility with Lightroom. See
   derived output, not changes to the original file.
 - The main source code is licensed under MPL-2.0 (SPDX: MPL-2.0).
 
-## Scope of the first implementation slice
+## First implementation slice
 
-The planned first slice is intentionally small: import common image and
-Apple-supported RAW files; retain a local catalog; apply exposure and
-crop previews; reopen the catalog; and export a tagged JPEG. A plan is
-not an implementation or a support promise.
+The implemented core slice is intentionally small: common image and
+Apple-supported RAW decoding, a local catalog, exposure and crop previews,
+catalog reopen, and tagged JPEG export. It is implementation evidence only,
+not a user workflow, support promise, or Lightroom comparison claim.
 
 ## Build and release status
 

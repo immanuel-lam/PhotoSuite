@@ -2,10 +2,11 @@
 
 ## Status
 
-No application build exists in this revision. Therefore PhotoSuite does
-not claim that builds are reproducible and does not publish an SBOM
-artifact. This document defines the required process before the first
-release candidate.
+A native macOS scaffold and pre-alpha core build exist in this revision.
+PhotoSuite does not claim that builds are reproducible. It has no signed,
+notarized, or published release, and it does not publish an SBOM artifact.
+No independent clean-build comparison has been recorded. This document
+defines the required process before the first release candidate.
 
 ## Reproducible-build objective
 
@@ -36,8 +37,8 @@ have been resolved or documented.
 
 ## Required release procedure
 
-After the project scaffold provides the exact commands, a release job
-must perform the following steps:
+The current scaffold provides build commands, but a release job must
+perform the following steps before a release claim:
 
 1. Check out the signed release commit and verify a clean worktree.
 2. Verify pinned dependency checksums and generate the project without
