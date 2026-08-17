@@ -307,6 +307,7 @@ struct WorkspaceSidebar: View {
           LibraryMetadataControls(workspace: workspace, asset: asset)
           LibraryKeywordControls(workspace: workspace, asset: asset)
           LibraryVirtualCopyControls(workspace: workspace, asset: asset)
+          FaceAnnotationInspector(workspace: workspace, placement: .library)
           MetadataEditorView(workspace: workspace, asset: asset)
         }
         .padding(18)

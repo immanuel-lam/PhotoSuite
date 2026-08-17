@@ -40,6 +40,10 @@ public final class PhotoWorkspace {
   public var folderAssetIDs: [UUID: Set<UUID>] = [:]
   public var keywordNodes: [KeywordNode] = []
   public var selectedAssetKeywords: [KeywordNode] = []
+  /// Durable face geometry and optional user labels for the selected asset.
+  /// Labels are user metadata only. PhotoSuite does not infer biometric identity.
+  public var selectedAssetFaces: [PhotoFace] = []
+  public var selectedFaceID: UUID?
   public var virtualCopies: [VirtualCopy] = []
   public var selectedVirtualCopyID: UUID?
   public var developPresets: [DevelopPreset] = []
@@ -56,6 +60,15 @@ public final class PhotoWorkspace {
   public var selectedAsset: PhotoAsset? {
     guard let selectedAssetID else { return nil }
     return assets.first { $0.id == selectedAssetID }
+  }
+
+  public var selectedFace: PhotoFace? {
+    guard let selectedFaceID else { return selectedAssetFaces.first }
+    return selectedAssetFaces.first { $0.id == selectedFaceID }
+  }
+
+  public var supportsPeopleMetadata: Bool {
+    catalog is any PeopleCatalogStore
   }
 
   public var supportsDurableLibrary: Bool {
@@ -205,6 +218,8 @@ public final class PhotoWorkspace {
       activeFolderID = nil
       keywordNodes = []
       selectedAssetKeywords = []
+      selectedAssetFaces = []
+      selectedFaceID = nil
       virtualCopies = []
       selectedVirtualCopyID = nil
       developPresets = []
@@ -280,6 +295,7 @@ public final class PhotoWorkspace {
         selectedAssetID = assetID
         currentRecipe = recipe
         await loadSelectedAssetKeywords(assetID)
+        await loadSelectedAssetFaces(assetID)
         resetHistory()
         syncDraftValues()
         await refreshPreview()
@@ -464,6 +480,7 @@ public final class PhotoWorkspace {
     if let first = imported.first {
       selectedAssetID = first.0.id
       currentRecipe = first.1
+      await loadSelectedAssetFaces(first.0.id)
       preview = previewCache[first.0.id]
       resetHistory()
       syncDraftValues()
@@ -488,6 +505,7 @@ public final class PhotoWorkspace {
       selectedVirtualCopyID = nil
       currentRecipe = recipe
       await loadSelectedAssetKeywords(assetID)
+      await loadSelectedAssetFaces(assetID)
       preview = previewCache[asset.id]
       resetHistory()
       syncDraftValues()
@@ -807,6 +825,7 @@ public final class PhotoWorkspace {
       selectedVirtualCopyID = copy.id
       currentRecipe = recipe
       await loadSelectedAssetKeywords(copy.sourceAssetID)
+      await loadSelectedAssetFaces(copy.sourceAssetID)
       preview = previewCache[copy.sourceAssetID]
       resetHistory()
       syncDraftValues()
@@ -898,6 +917,134 @@ public final class PhotoWorkspace {
     } catch {
       selectedAssetKeywords = []
       record(error, operation: "library.keywords.list")
+    }
+  }
+
+  /// Loads durable face geometry and user labels for the selected photograph.
+  ///
+  /// This method exposes only the domain projection needed by Library and
+  /// Develop. The catalog implementation and any storage details remain
+  /// private to the workspace. A missing PeopleCatalogStore is a supported
+  /// capability boundary, not a failed catalog reopen.
+  public func loadSelectedAssetFaces() async {
+    guard let assetID = selectedAssetID else {
+      selectedAssetFaces = []
+      selectedFaceID = nil
+      return
+    }
+    await loadSelectedAssetFaces(assetID)
+  }
+
+  private func loadSelectedAssetFaces(_ assetID: UUID) async {
+    guard let peopleCatalog = catalog as? any PeopleCatalogStore else {
+      selectedAssetFaces = []
+      selectedFaceID = nil
+      return
+    }
+    do {
+      let faces = try await peopleCatalog.listFaces(CatalogFaceListRequest(assetID: assetID)).faces
+      selectedAssetFaces = faces
+      if let selectedFaceID, faces.contains(where: { $0.id == selectedFaceID }) {
+        self.selectedFaceID = selectedFaceID
+      } else {
+        selectedFaceID = faces.first?.id
+      }
+    } catch {
+      selectedAssetFaces = []
+      selectedFaceID = nil
+      record(error, operation: "library.faces.list")
+    }
+  }
+
+  /// Selects one of the currently projected face annotations for label editing.
+  /// A nil selection returns the inspector to its first-annotation state.
+  public func selectFace(_ faceID: UUID?) {
+    guard let faceID else {
+      selectedFaceID = selectedAssetFaces.first?.id
+      return
+    }
+    guard selectedAssetFaces.contains(where: { $0.id == faceID }) else {
+      record(PhotoWorkspaceError.invalidSelection(faceID), operation: "library.faces.select")
+      return
+    }
+    selectedFaceID = faceID
+  }
+
+  /// Persists an optional user label without changing detector geometry or
+  /// provenance. Blank labels are treated as an explicit clear operation.
+  public func saveFaceLabel(_ label: String?, for faceID: UUID) async {
+    guard let selectedAssetID else {
+      record(
+        PhotoWorkspaceError.noSelection(operation: "face labelling"),
+        operation: "library.faces.save"
+      )
+      return
+    }
+    guard let peopleCatalog = catalog as? any PeopleCatalogStore else {
+      record(PhotoWorkspaceError.peopleStoreUnavailable, operation: "library.faces.save")
+      return
+    }
+    guard let face = selectedAssetFaces.first(where: { $0.id == faceID }),
+      face.assetID == selectedAssetID
+    else {
+      record(PhotoWorkspaceError.invalidSelection(faceID), operation: "library.faces.save")
+      return
+    }
+    let normalizedLabel = label?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let savedLabel = normalizedLabel.flatMap { $0.isEmpty ? nil : $0 }
+    guard
+      let updated = PhotoFace(
+        id: face.id,
+        assetID: face.assetID,
+        region: face.region,
+        label: savedLabel,
+        confidence: face.confidence,
+        source: face.source,
+        createdAt: face.createdAt,
+        updatedAt: now()
+      )
+    else {
+      record(
+        PhotoWorkspaceError.operationFailed(
+          operation: "library.faces.save",
+          message: "The face label is invalid."
+        ),
+        operation: "library.faces.save"
+      )
+      return
+    }
+    do {
+      let persisted = try await peopleCatalog.saveFace(CatalogFaceSaveRequest(face: updated)).face
+      if let index = selectedAssetFaces.firstIndex(where: { $0.id == faceID }) {
+        selectedAssetFaces[index] = persisted
+      }
+      selectedFaceID = persisted.id
+      lastError = nil
+      errorMessage = nil
+    } catch {
+      record(error, operation: "library.faces.save")
+    }
+  }
+
+  /// Removes one annotation from the catalog. This does not modify the source
+  /// photograph and does not claim that a person was identified or removed.
+  public func deleteFaceAnnotation(_ faceID: UUID) async {
+    guard let peopleCatalog = catalog as? any PeopleCatalogStore else {
+      record(PhotoWorkspaceError.peopleStoreUnavailable, operation: "library.faces.delete")
+      return
+    }
+    guard selectedAssetFaces.contains(where: { $0.id == faceID }) else {
+      record(PhotoWorkspaceError.invalidSelection(faceID), operation: "library.faces.delete")
+      return
+    }
+    do {
+      _ = try await peopleCatalog.deleteFace(CatalogFaceDeleteRequest(faceID: faceID))
+      selectedAssetFaces.removeAll { $0.id == faceID }
+      if selectedFaceID == faceID { selectedFaceID = selectedAssetFaces.first?.id }
+      lastError = nil
+      errorMessage = nil
+    } catch {
+      record(error, operation: "library.faces.delete")
     }
   }
 

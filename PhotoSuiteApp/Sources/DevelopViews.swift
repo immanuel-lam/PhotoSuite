@@ -163,6 +163,9 @@ struct DevelopInspector: View {
         AIModelControls(workspace: workspace)
 
         Divider()
+        FaceAnnotationInspector(workspace: workspace, placement: .develop)
+
+        Divider()
         Text("Geometry").font(.headline)
         HStack {
           Button("Reset Crop") { Task { await workspace.resetCrop() } }
