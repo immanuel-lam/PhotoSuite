@@ -22,9 +22,10 @@ contains these tested components:
 - bounded previews, a 256-bin RGB and luminance histogram, and recovery
   for legacy empty RAW decoder pins;
 - durable ordered recipes for basic Develop controls, baseline tone,
-  white-balance, transform, detail, optics, effects, calibration,
-  black-and-white, HDR-intent, and deterministic manual red-eye operations
-  for user-specified regions; and
+  white-balance, transform, detail, bounded lens distortion, chromatic-aberration
+  approximation, defringe, optics, effects, calibration, black-and-white,
+  HDR-intent, and deterministic manual red-eye operations for user-specified
+  regions; and
 - atomic JPEG, PNG, HEIF, and TIFF delivery with tested resize, metadata,
   text-watermark, output-sharpening, filtered Library selection, and sequential
   batch-export options; and
@@ -46,7 +47,8 @@ contains these tested components:
 The interface can review local import selections with duplicate states, choose
 Add, Copy, or Move transfer semantics, browse a catalog, relink one or many
 missing sources after fingerprint validation, apply basic and
-baseline Develop groups, author local mask graphs, crop and rotate, compare before
+baseline Develop groups, author local mask graphs, crop with an interactive canvas
+and rotate, compare before
 and after, inspect the histogram and three-way colour grade, author versioned masks,
 edit catalog metadata, import and write the supported XMP sidecar fields, use
 validated manual clone, healing, and red-eye controls, and write JPEG, PNG, HEIF,
