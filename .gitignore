@@ -8,4 +8,4 @@ xcuserdata/
 .worktrees/
 Artifacts/
 Build/
-
+*.xcodeproj/

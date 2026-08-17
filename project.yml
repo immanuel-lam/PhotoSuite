@@ -1,0 +1,60 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+name: PhotoSuite
+
+options:
+  minimumXcodeGenVersion: 2.45.3
+  xcodeVersion: "26.0"
+  deploymentTarget:
+    macOS: "15.0"
+  createIntermediateGroups: true
+
+packages:
+  PhotoSuitePackage:
+    path: .
+
+settings:
+  base:
+    ARCHS: arm64
+    MACOSX_DEPLOYMENT_TARGET: "15.0"
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+
+targets:
+  PhotoSuite:
+    type: application
+    platform: macOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: PhotoSuiteApp/Sources
+      - path: PhotoSuiteApp/Resources
+        buildPhase: resources
+    dependencies:
+      - package: PhotoSuitePackage
+        product: PhotoWorkflow
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.photosuite.PhotoSuite
+        PRODUCT_NAME: PhotoSuite
+        CODE_SIGN_ENTITLEMENTS: PhotoSuiteApp/PhotoSuite.entitlements
+        GENERATE_INFOPLIST_FILE: true
+        INFOPLIST_KEY_CFBundleDisplayName: PhotoSuite
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.photography
+        MARKETING_VERSION: 0.1.0
+        CURRENT_PROJECT_VERSION: 1
+        ENABLE_APP_SANDBOX: true
+        ENABLE_USER_SELECTED_FILES: readwrite
+        ENABLE_HARDENED_RUNTIME: true
+        SUPPORTS_MACCATALYST: false
+
+schemes:
+  PhotoSuite:
+    build:
+      targets:
+        PhotoSuite: all
+    run:
+      config: Debug
+    archive:
+      config: Release
