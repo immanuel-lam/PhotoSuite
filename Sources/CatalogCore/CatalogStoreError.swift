@@ -13,6 +13,8 @@ public enum CatalogStoreError: Error, LocalizedError, Sendable {
   case source(operation: String, message: String)
   case bookmark(operation: String, message: String)
   case unsupported(operation: String, message: String)
+  case cleanup(operation: String, primaryError: String, cleanupError: String)
+  case closed(operation: String, message: String)
 
   public var errorDescription: String? {
     switch self {
@@ -22,6 +24,10 @@ public enum CatalogStoreError: Error, LocalizedError, Sendable {
       .encoding(let operation, let message), .decoding(let operation, let message),
       .source(let operation, let message), .bookmark(let operation, let message),
       .unsupported(let operation, let message):
+      "\(operation): \(message)"
+    case .cleanup(let operation, let primaryError, let cleanupError):
+      "\(operation) failed: \(primaryError). Cleanup also failed: \(cleanupError)"
+    case .closed(let operation, let message):
       "\(operation): \(message)"
     }
   }

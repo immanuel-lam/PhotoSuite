@@ -23,38 +23,51 @@ public enum SourceFingerprinter {
 
     do {
       let fileHandle = try FileHandle(forReadingFrom: url)
-      defer { try? fileHandle.close() }
-      var digest = SHA256()
-      var byteCount: UInt64 = 0
+      do {
+        var digest = SHA256()
+        var byteCount: UInt64 = 0
 
-      while let data = try fileHandle.read(upToCount: chunkSize), !data.isEmpty {
-        let (nextCount, overflow) = byteCount.addingReportingOverflow(UInt64(data.count))
-        guard !overflow else {
+        while let data = try fileHandle.read(upToCount: chunkSize), !data.isEmpty {
+          let (nextCount, overflow) = byteCount.addingReportingOverflow(UInt64(data.count))
+          guard !overflow else {
+            throw CatalogStoreError.source(
+              operation: "fingerprint",
+              message: "The source byte count overflowed UInt64."
+            )
+          }
+          byteCount = nextCount
+          digest.update(data: data)
+        }
+
+        let hash = digest.finalize().map { String(format: "%02x", $0) }.joined()
+        let modificationDate = try url.resourceValues(forKeys: [.contentModificationDateKey])
+          .contentModificationDate
+        guard
+          let fingerprint = SourceFingerprint(
+            sha256: hash,
+            byteCount: byteCount,
+            modificationDate: modificationDate
+          )
+        else {
           throw CatalogStoreError.source(
             operation: "fingerprint",
-            message: "The source byte count overflowed UInt64."
+            message: "The generated SHA-256 value was invalid."
           )
         }
-        byteCount = nextCount
-        digest.update(data: data)
+        try fileHandle.close()
+        return fingerprint
+      } catch let primaryError {
+        do {
+          try fileHandle.close()
+        } catch let closeError {
+          throw CatalogStoreError.cleanup(
+            operation: "fingerprint.close",
+            primaryError: String(describing: primaryError),
+            cleanupError: String(describing: closeError)
+          )
+        }
+        throw primaryError
       }
-
-      let hash = digest.finalize().map { String(format: "%02x", $0) }.joined()
-      let modificationDate = try url.resourceValues(forKeys: [.contentModificationDateKey])
-        .contentModificationDate
-      guard
-        let fingerprint = SourceFingerprint(
-          sha256: hash,
-          byteCount: byteCount,
-          modificationDate: modificationDate
-        )
-      else {
-        throw CatalogStoreError.source(
-          operation: "fingerprint",
-          message: "The generated SHA-256 value was invalid."
-        )
-      }
-      return fingerprint
     } catch let error as CatalogStoreError {
       throw error
     } catch {

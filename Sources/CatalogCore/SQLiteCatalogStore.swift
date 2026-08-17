@@ -8,13 +8,23 @@ import SQLite3
 
 private final class SQLiteConnection: @unchecked Sendable {
   let database: OpaquePointer
+  private var isClosed = false
 
   init(database: OpaquePointer) {
     self.database = database
   }
 
   deinit {
-    _ = sqlite3_close_v2(database)
+    _ = close()
+  }
+
+  func close() -> Int32 {
+    guard !isClosed else { return SQLITE_OK }
+    let code = sqlite3_close_v2(database)
+    if code == SQLITE_OK {
+      isClosed = true
+    }
+    return code
   }
 }
 
@@ -24,6 +34,8 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
   private let ftsAvailable: Bool
   private let encoder: JSONEncoder
   private let decoder: JSONDecoder
+  private let catalogURL: URL
+  private var isUsable = true
 
   private var database: OpaquePointer { connection.database }
 
@@ -39,18 +51,36 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
       )
     }
 
+    self.catalogURL = catalogURL.standardizedFileURL
     let database = try Self.openDatabase(at: catalogURL)
     do {
+      let version = try Self.readSchemaVersion(database)
+      guard version <= Self.schemaVersion else {
+        throw CatalogStoreError.unsupported(
+          operation: "catalog.open",
+          message:
+            "Catalog schema version \(version) is newer than supported version \(Self.schemaVersion)."
+        )
+      }
       try Self.configure(database)
       let ftsAvailable = try Self.migrate(
-        database, ftsAvailabilityOverride: ftsAvailabilityOverride)
+        database, version: version, ftsAvailabilityOverride: ftsAvailabilityOverride)
       self.connection = SQLiteConnection(database: database)
       self.ftsAvailable = ftsAvailable
       self.encoder = Self.makeEncoder()
       self.decoder = Self.makeDecoder()
-    } catch {
-      _ = sqlite3_close_v2(database)
-      throw error
+    } catch let primaryError {
+      let closeCode = sqlite3_close_v2(database)
+      guard closeCode == SQLITE_OK else {
+        throw CatalogStoreError.cleanup(
+          operation: "catalog.open.close",
+          primaryError: String(describing: primaryError),
+          cleanupError: Self.sqliteError(
+            operation: "catalog.open.close", database: database, code: closeCode
+          ).localizedDescription
+        )
+      }
+      throw primaryError
     }
   }
 
@@ -61,15 +91,24 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
     return CatalogAssetUpsertResult(asset: request.asset)
   }
 
+  public func close() throws {
+    guard isUsable else { return }
+    let code = connection.close()
+    guard code == SQLITE_OK else {
+      isUsable = false
+      throw sqliteError(operation: "catalog.close", code: code)
+    }
+    isUsable = false
+  }
+
   private func storeAsset(_ asset: PhotoAsset) throws {
-    let assetJSON = try encode(asset, operation: "asset.upsert.encode")
     try withTransaction(operation: "asset.upsert") {
       try withStatement(
         """
         INSERT INTO assets (
           id, source_url, filename, type_identifier, fingerprint_json, import_ms,
-          capture_ms, dimensions_json, rating, color_label, is_missing, asset_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          capture_ms, dimensions_json, rating, color_label, is_missing
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           source_url=excluded.source_url,
           filename=excluded.filename,
@@ -80,8 +119,7 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
           dimensions_json=excluded.dimensions_json,
           rating=excluded.rating,
           color_label=excluded.color_label,
-          is_missing=excluded.is_missing,
-          asset_json=excluded.asset_json;
+          is_missing=excluded.is_missing;
         """,
         operation: "asset.upsert"
       ) { statement in
@@ -114,7 +152,6 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
         try bind(
           asset.isMissing ? Int64(1) : Int64(0), to: statement, index: 11,
           operation: "asset.upsert")
-        try bind(assetJSON, to: statement, index: 12, operation: "asset.upsert")
         try stepDone(statement, operation: "asset.upsert")
       }
       try updateSearchIndex(for: asset)
@@ -155,7 +192,8 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
     let limit = request.limit.map(Int64.init) ?? Int64.max
     return CatalogAssetListResult(
       assets: try assets(
-        sql: "SELECT asset_json FROM assets ORDER BY \(order) LIMIT ? OFFSET ?;",
+        sql:
+          "SELECT id, source_url, filename, type_identifier, fingerprint_json, import_ms, capture_ms, dimensions_json, rating, color_label, is_missing FROM assets ORDER BY \(order) LIMIT ? OFFSET ?;",
         operation: "asset.list",
         bindValues: { statement in
           try bind(limit, to: statement, index: 1, operation: "asset.list")
@@ -184,7 +222,9 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
       return CatalogAssetSearchResult(
         assets: try assets(
           sql: """
-            SELECT assets.asset_json
+            SELECT assets.id, assets.source_url, assets.filename, assets.type_identifier,
+              assets.fingerprint_json, assets.import_ms, assets.capture_ms,
+              assets.dimensions_json, assets.rating, assets.color_label, assets.is_missing
             FROM asset_search
             JOIN assets ON assets.id = asset_search.asset_id
             WHERE asset_search MATCH ?
@@ -204,7 +244,8 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
     return CatalogAssetSearchResult(
       assets: try assets(
         sql: """
-          SELECT asset_json FROM assets
+          SELECT id, source_url, filename, type_identifier, fingerprint_json, import_ms,
+            capture_ms, dimensions_json, rating, color_label, is_missing FROM assets
           WHERE filename LIKE ? ESCAPE '\\'
             OR COALESCE(type_identifier, '') LIKE ? ESCAPE '\\'
             OR source_url LIKE ? ESCAPE '\\'
@@ -332,7 +373,58 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
         operation: "asset.relink", message: "The relinked asset is invalid.")
     }
     try storeAsset(relinked)
+    // A bookmark is an optional access aid. The durable relink must succeed even if the
+    // current process cannot create a scope for this URL.
+    _ = try? createBookmark(forAssetID: relinked.id)
     return CatalogRelinkAssetResult(asset: relinked)
+  }
+
+  public func createBookmark(forAssetID assetID: UUID) throws -> Data {
+    guard let storedAsset = try asset(id: assetID, operation: "bookmark.create") else {
+      throw CatalogStoreError.notFound(
+        operation: "bookmark.create", message: "The asset does not exist.")
+    }
+    let data = try SecurityScopedBookmarkStore.create(url: storedAsset.sourceURL)
+    try storeBookmark(data, forAssetID: assetID)
+    return data
+  }
+
+  public func bookmarkData(forAssetID assetID: UUID) throws -> Data? {
+    try withStatement(
+      "SELECT bookmark FROM asset_bookmarks WHERE asset_id = ?;", operation: "bookmark.read"
+    ) { statement in
+      try bind(assetID: assetID, to: statement, index: 1, operation: "bookmark.read")
+      let code = sqlite3_step(statement)
+      if code == SQLITE_DONE { return nil }
+      guard code == SQLITE_ROW else { throw sqliteError(operation: "bookmark.read", code: code) }
+      return try columnData(statement, column: 0, operation: "bookmark.read")
+    }
+  }
+
+  public func resolveBookmark(forAssetID assetID: UUID) throws -> ResolvedSecurityScopedBookmark {
+    try resolveBookmark(forAssetID: assetID, using: SecurityScopedBookmarkStore.resolve)
+  }
+
+  func resolveBookmarkForTesting(
+    forAssetID assetID: UUID,
+    _ resolver: (Data) throws -> ResolvedSecurityScopedBookmark
+  ) throws -> ResolvedSecurityScopedBookmark {
+    try resolveBookmark(forAssetID: assetID, using: resolver)
+  }
+
+  private func resolveBookmark(
+    forAssetID assetID: UUID,
+    using resolver: (Data) throws -> ResolvedSecurityScopedBookmark
+  ) throws -> ResolvedSecurityScopedBookmark {
+    guard let data = try bookmarkData(forAssetID: assetID) else {
+      throw CatalogStoreError.notFound(
+        operation: "bookmark.resolve", message: "The asset has no stored bookmark.")
+    }
+    let resolved = try resolver(data)
+    if let renewedData = resolved.renewedData {
+      try storeBookmark(renewedData, forAssetID: assetID)
+    }
+    return resolved
   }
 
   public func checkIntegrity(
@@ -358,9 +450,18 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
   }
 
   public func backup(_ request: CatalogBackupRequest) async throws -> CatalogBackupResult {
+    try ensureUsable(operation: "catalog.backup")
     guard request.destinationURL.isFileURL else {
       throw CatalogStoreError.invalidRequest(
         operation: "catalog.backup", message: "The destination must be a file URL.")
+    }
+    guard request.destinationURL.standardizedFileURL != catalogURL else {
+      throw CatalogStoreError.invalidRequest(
+        operation: "catalog.backup", message: "The destination must not be the open catalog file.")
+    }
+    guard !FileManager.default.fileExists(atPath: request.destinationURL.path) else {
+      throw CatalogStoreError.invalidRequest(
+        operation: "catalog.backup", message: "The destination already exists.")
     }
     var destination: OpaquePointer?
     let openCode = sqlite3_open_v2(
@@ -370,36 +471,70 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
       nil
     )
     guard openCode == SQLITE_OK, let destination else {
-      let error = Self.sqliteError(
+      let primaryError = Self.sqliteError(
         operation: "catalog.backup.open", database: destination, code: openCode)
-      if let destination { _ = sqlite3_close_v2(destination) }
-      throw error
-    }
-    defer { _ = sqlite3_close_v2(destination) }
-
-    guard let backup = sqlite3_backup_init(destination, "main", database, "main") else {
-      throw Self.sqliteError(
-        operation: "catalog.backup.init", database: destination, code: sqlite3_errcode(destination))
-    }
-    let start = Date()
-    var stepCode: Int32 = SQLITE_OK
-    repeat {
-      stepCode = sqlite3_backup_step(backup, -1)
-      if stepCode == SQLITE_BUSY || stepCode == SQLITE_LOCKED {
-        _ = sqlite3_sleep(50)
+      if let destination {
+        let closeCode = sqlite3_close_v2(destination)
+        guard closeCode == SQLITE_OK else {
+          throw CatalogStoreError.cleanup(
+            operation: "catalog.backup.open.close",
+            primaryError: primaryError.localizedDescription,
+            cleanupError: Self.sqliteError(
+              operation: "catalog.backup.open.close", database: destination, code: closeCode
+            ).localizedDescription
+          )
+        }
       }
-    } while (stepCode == SQLITE_BUSY || stepCode == SQLITE_LOCKED)
-      && Date().timeIntervalSince(start) < 5
-    let finishCode = sqlite3_backup_finish(backup)
-    guard stepCode == SQLITE_DONE else {
-      throw Self.sqliteError(
-        operation: "catalog.backup.step", database: destination, code: stepCode)
+      throw primaryError
     }
-    guard finishCode == SQLITE_OK else {
-      throw Self.sqliteError(
-        operation: "catalog.backup.finish", database: destination, code: finishCode)
+    do {
+      guard let backup = sqlite3_backup_init(destination, "main", database, "main") else {
+        throw Self.sqliteError(
+          operation: "catalog.backup.init", database: destination,
+          code: sqlite3_errcode(destination))
+      }
+      let start = Date()
+      var stepCode: Int32 = SQLITE_OK
+      repeat {
+        stepCode = sqlite3_backup_step(backup, -1)
+        if stepCode == SQLITE_BUSY || stepCode == SQLITE_LOCKED {
+          _ = sqlite3_sleep(50)
+        }
+      } while (stepCode == SQLITE_BUSY || stepCode == SQLITE_LOCKED)
+        && Date().timeIntervalSince(start) < 5
+      let finishCode = sqlite3_backup_finish(backup)
+      guard stepCode == SQLITE_DONE else {
+        throw Self.sqliteError(
+          operation: "catalog.backup.step", database: destination, code: stepCode)
+      }
+      guard finishCode == SQLITE_OK else {
+        throw Self.sqliteError(
+          operation: "catalog.backup.finish", database: destination, code: finishCode)
+      }
+      let closeCode = sqlite3_close_v2(destination)
+      guard closeCode == SQLITE_OK else {
+        throw Self.sqliteError(
+          operation: "catalog.backup.close", database: destination, code: closeCode)
+      }
+      return CatalogBackupResult(destinationURL: request.destinationURL)
+    } catch let primaryError {
+      let closeCode = sqlite3_close_v2(destination)
+      try? FileManager.default.removeItem(at: request.destinationURL)
+      try? FileManager.default.removeItem(
+        at: URL(fileURLWithPath: request.destinationURL.path + "-wal"))
+      try? FileManager.default.removeItem(
+        at: URL(fileURLWithPath: request.destinationURL.path + "-shm"))
+      guard closeCode == SQLITE_OK else {
+        throw CatalogStoreError.cleanup(
+          operation: "catalog.backup.close",
+          primaryError: String(describing: primaryError),
+          cleanupError: Self.sqliteError(
+            operation: "catalog.backup.close", database: destination, code: closeCode
+          ).localizedDescription
+        )
+      }
+      throw primaryError
     }
-    return CatalogBackupResult(destinationURL: request.destinationURL)
   }
 
   public func enqueue(_ request: JobEnqueueRequest) async throws -> JobEnqueueResult {
@@ -479,15 +614,16 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
   }
 
   private func asset(id: UUID, operation: String) throws -> PhotoAsset? {
-    try withStatement("SELECT asset_json FROM assets WHERE id = ?;", operation: operation) {
+    try withStatement(
+      "SELECT id, source_url, filename, type_identifier, fingerprint_json, import_ms, capture_ms, dimensions_json, rating, color_label, is_missing FROM assets WHERE id = ?;",
+      operation: operation
+    ) {
       statement in
       try bind(assetID: id, to: statement, index: 1, operation: operation)
       let code = sqlite3_step(statement)
       if code == SQLITE_DONE { return nil }
       guard code == SQLITE_ROW else { throw sqliteError(operation: operation, code: code) }
-      return try decode(
-        PhotoAsset.self, from: columnData(statement, column: 0, operation: operation),
-        operation: operation)
+      return try decodeAsset(statement, operation: operation)
     }
   }
 
@@ -518,6 +654,27 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
     }
   }
 
+  private func storeBookmark(_ data: Data, forAssetID assetID: UUID) throws {
+    guard try assetExists(assetID, operation: "bookmark.write") else {
+      throw CatalogStoreError.notFound(
+        operation: "bookmark.write", message: "The asset does not exist.")
+    }
+    try withStatement(
+      """
+      INSERT INTO asset_bookmarks (asset_id, bookmark, updated_ms) VALUES (?, ?, ?)
+      ON CONFLICT(asset_id) DO UPDATE SET
+        bookmark=excluded.bookmark,
+        updated_ms=excluded.updated_ms;
+      """,
+      operation: "bookmark.write"
+    ) { statement in
+      try bind(assetID: assetID, to: statement, index: 1, operation: "bookmark.write")
+      try bind(data, to: statement, index: 2, operation: "bookmark.write")
+      try bind(milliseconds(Date()), to: statement, index: 3, operation: "bookmark.write")
+      try stepDone(statement, operation: "bookmark.write")
+    }
+  }
+
   private func assets(
     sql: String,
     operation: String,
@@ -530,10 +687,7 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
         let code = sqlite3_step(statement)
         if code == SQLITE_DONE { break }
         guard code == SQLITE_ROW else { throw sqliteError(operation: operation, code: code) }
-        results.append(
-          try decode(
-            PhotoAsset.self, from: columnData(statement, column: 0, operation: operation),
-            operation: operation))
+        results.append(try decodeAsset(statement, operation: operation))
       }
       return results
     }
@@ -562,14 +716,24 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
   }
 
   private func withTransaction<T>(operation: String, _ body: () throws -> T) throws -> T {
+    try ensureUsable(operation: operation)
     try execute("BEGIN IMMEDIATE;", operation: "\(operation).begin")
     do {
       let result = try body()
       try execute("COMMIT;", operation: "\(operation).commit")
       return result
-    } catch {
-      _ = try? execute("ROLLBACK;", operation: "\(operation).rollback")
-      throw error
+    } catch let primaryError {
+      do {
+        try execute("ROLLBACK;", operation: "\(operation).rollback")
+      } catch let rollbackError {
+        isUsable = false
+        throw CatalogStoreError.cleanup(
+          operation: operation,
+          primaryError: String(describing: primaryError),
+          cleanupError: String(describing: rollbackError)
+        )
+      }
+      throw primaryError
     }
   }
 
@@ -578,6 +742,7 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
     operation: String,
     _ body: (OpaquePointer) throws -> T
   ) throws -> T {
+    try ensureUsable(operation: operation)
     var statement: OpaquePointer?
     let prepareCode = sqlite3_prepare_v2(database, sql, -1, &statement, nil)
     guard prepareCode == SQLITE_OK, let statement else {
@@ -587,7 +752,15 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
     do {
       result = try body(statement)
     } catch {
-      _ = sqlite3_finalize(statement)
+      let finalizeCode = sqlite3_finalize(statement)
+      if finalizeCode != SQLITE_OK {
+        throw CatalogStoreError.cleanup(
+          operation: "\(operation).finalize",
+          primaryError: String(describing: error),
+          cleanupError: sqliteError(operation: "\(operation).finalize", code: finalizeCode)
+            .localizedDescription
+        )
+      }
       throw error
     }
     let finalizeCode = sqlite3_finalize(statement)
@@ -598,6 +771,7 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
   }
 
   private func execute(_ sql: String, operation: String) throws {
+    try ensureUsable(operation: operation)
     var errorMessage: UnsafeMutablePointer<CChar>?
     let code = sqlite3_exec(database, sql, nil, nil, &errorMessage)
     defer {
@@ -647,6 +821,10 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
   {
     let code: Int32
     if let value {
+      guard value.count <= Int(Int32.max) else {
+        throw CatalogStoreError.invalidRequest(
+          operation: operation, message: "The BLOB value exceeds SQLite's Int32 binding limit.")
+      }
       code = value.withUnsafeBytes { bytes in
         sqlite3_bind_blob(
           statement, index, bytes.baseAddress, Int32(value.count), Self.sqliteTransient)
@@ -673,6 +851,13 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
     guard code == SQLITE_OK else { throw sqliteError(operation: "\(operation).bind", code: code) }
   }
 
+  private func ensureUsable(operation: String) throws {
+    guard isUsable else {
+      throw CatalogStoreError.closed(
+        operation: operation, message: "The SQLite catalog connection is closed or unusable.")
+    }
+  }
+
   private func columnData(_ statement: OpaquePointer, column: Int32, operation: String) throws
     -> Data
   {
@@ -696,6 +881,80 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
         operation: operation, message: "A required text value is NULL.")
     }
     return String(cString: value)
+  }
+
+  private func optionalColumnString(_ statement: OpaquePointer, column: Int32) -> String? {
+    guard sqlite3_column_type(statement, column) != SQLITE_NULL,
+      let value = sqlite3_column_text(statement, column)
+    else {
+      return nil
+    }
+    return String(cString: value)
+  }
+
+  private func optionalColumnData(_ statement: OpaquePointer, column: Int32) -> Data? {
+    guard sqlite3_column_type(statement, column) != SQLITE_NULL else { return nil }
+    let count = Int(sqlite3_column_bytes(statement, column))
+    guard count >= 0 else { return nil }
+    if count == 0 { return Data() }
+    guard let bytes = sqlite3_column_blob(statement, column) else { return nil }
+    return Data(bytes: bytes, count: count)
+  }
+
+  private func optionalDate(_ statement: OpaquePointer, column: Int32) -> Date? {
+    guard sqlite3_column_type(statement, column) != SQLITE_NULL else { return nil }
+    return Date(
+      timeIntervalSince1970: TimeInterval(sqlite3_column_int64(statement, column)) / 1_000)
+  }
+
+  private func decodeAsset(_ statement: OpaquePointer, operation: String) throws -> PhotoAsset {
+    guard let id = UUID(uuidString: try columnString(statement, column: 0, operation: operation))
+    else {
+      throw CatalogStoreError.decoding(operation: operation, message: "The asset ID is invalid.")
+    }
+    guard let sourceURL = URL(string: try columnString(statement, column: 1, operation: operation))
+    else {
+      throw CatalogStoreError.decoding(operation: operation, message: "The source URL is invalid.")
+    }
+    let filename = try columnString(statement, column: 2, operation: operation)
+    let fingerprint: SourceFingerprint = try decode(
+      SourceFingerprint.self,
+      from: columnData(statement, column: 4, operation: operation),
+      operation: operation
+    )
+    let dimensions = try optionalColumnData(statement, column: 7).map {
+      try decode(PixelDimensions.self, from: $0, operation: operation)
+    }
+    let rating = sqlite3_column_int64(statement, 8)
+    guard let integerRating = Int(exactly: rating), (0...5).contains(integerRating) else {
+      throw CatalogStoreError.decoding(
+        operation: operation, message: "The asset rating is invalid.")
+    }
+    let missing = sqlite3_column_int64(statement, 10)
+    guard missing == 0 || missing == 1 else {
+      throw CatalogStoreError.decoding(
+        operation: operation, message: "The missing-file flag is invalid.")
+    }
+    guard
+      let asset = PhotoAsset(
+        id: id,
+        sourceURL: sourceURL,
+        filename: filename,
+        typeIdentifier: optionalColumnString(statement, column: 3),
+        fingerprint: fingerprint,
+        importDate: Date(
+          timeIntervalSince1970: TimeInterval(sqlite3_column_int64(statement, 5)) / 1_000),
+        captureDate: optionalDate(statement, column: 6),
+        pixelDimensions: dimensions,
+        rating: integerRating,
+        colorLabel: optionalColumnString(statement, column: 9).flatMap(ColorLabel.init(rawValue:)),
+        isMissing: missing == 1
+      )
+    else {
+      throw CatalogStoreError.decoding(
+        operation: operation, message: "The normalized asset row is invalid.")
+    }
+    return asset
   }
 
   private func encode<T: Encodable>(_ value: T, operation: String) throws -> Data {
@@ -744,24 +1003,40 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
       "PRAGMA foreign_keys=ON;", database: database, operation: "catalog.configure.foreignKeys")
     try execute(
       "PRAGMA busy_timeout=5000;", database: database, operation: "catalog.configure.busyTimeout")
-  }
-
-  private static func migrate(_ database: OpaquePointer, ftsAvailabilityOverride: Bool?) throws
-    -> Bool
-  {
-    let version = try scalarInt(
-      database, sql: "PRAGMA user_version;", operation: "catalog.migrate.version")
-    guard version <= schemaVersion else {
+    let journalMode = try scalarString(
+      database, sql: "PRAGMA journal_mode;", operation: "catalog.configure.validateJournalMode")
+    let synchronous = try scalarInt(
+      database, sql: "PRAGMA synchronous;", operation: "catalog.configure.validateSynchronous")
+    let foreignKeys = try scalarInt(
+      database, sql: "PRAGMA foreign_keys;", operation: "catalog.configure.validateForeignKeys")
+    let busyTimeout = try scalarInt(
+      database, sql: "PRAGMA busy_timeout;", operation: "catalog.configure.validateBusyTimeout")
+    guard journalMode.caseInsensitiveCompare("wal") == .orderedSame,
+      synchronous == 2,
+      foreignKeys == 1,
+      busyTimeout == 5_000
+    else {
       throw CatalogStoreError.unsupported(
-        operation: "catalog.migrate",
-        message:
-          "Catalog schema version \(version) is newer than supported version \(schemaVersion)."
+        operation: "catalog.configure",
+        message: "SQLite did not accept the required durability configuration."
       )
     }
+  }
+
+  private static func readSchemaVersion(_ database: OpaquePointer) throws -> Int64 {
+    try scalarInt(database, sql: "PRAGMA user_version;", operation: "catalog.open.version")
+  }
+
+  private static func migrate(
+    _ database: OpaquePointer,
+    version: Int64,
+    ftsAvailabilityOverride: Bool?
+  ) throws
+    -> Bool
+  {
     let shouldUseFTS = ftsAvailabilityOverride ?? (sqlite3_compileoption_used("ENABLE_FTS5") != 0)
     if version == schemaVersion {
-      if !shouldUseFTS { return false }
-      return try tableExists(database, name: "asset_search")
+      return try validateVersionOneSchema(database, shouldUseFTS: shouldUseFTS)
     }
 
     try execute("BEGIN IMMEDIATE;", database: database, operation: "catalog.migrate.begin")
@@ -779,8 +1054,7 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
           dimensions_json BLOB,
           rating INTEGER NOT NULL CHECK (rating BETWEEN 0 AND 5),
           color_label TEXT,
-          is_missing INTEGER NOT NULL CHECK (is_missing IN (0, 1)),
-          asset_json BLOB NOT NULL
+          is_missing INTEGER NOT NULL CHECK (is_missing IN (0, 1))
         );
         CREATE INDEX assets_import_ms_index ON assets(import_ms);
         CREATE INDEX assets_capture_ms_index ON assets(capture_ms);
@@ -834,52 +1108,240 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
         "PRAGMA user_version=1;", database: database, operation: "catalog.migrate.setVersion")
       try execute("COMMIT;", database: database, operation: "catalog.migrate.commit")
       return ftsAvailable
-    } catch {
-      _ = try? execute("ROLLBACK;", database: database, operation: "catalog.migrate.rollback")
-      throw error
+    } catch let primaryError {
+      do {
+        try execute("ROLLBACK;", database: database, operation: "catalog.migrate.rollback")
+      } catch let rollbackError {
+        throw CatalogStoreError.cleanup(
+          operation: "catalog.migrate",
+          primaryError: String(describing: primaryError),
+          cleanupError: String(describing: rollbackError)
+        )
+      }
+      throw primaryError
+    }
+  }
+
+  private static func withStaticStatement<T>(
+    _ database: OpaquePointer,
+    sql: String,
+    operation: String,
+    _ body: (OpaquePointer) throws -> T
+  ) throws -> T {
+    var statement: OpaquePointer?
+    let prepareCode = sqlite3_prepare_v2(database, sql, -1, &statement, nil)
+    guard prepareCode == SQLITE_OK, let statement else {
+      throw sqliteError(operation: "\(operation).prepare", database: database, code: prepareCode)
+    }
+    do {
+      let result = try body(statement)
+      let finalizeCode = sqlite3_finalize(statement)
+      guard finalizeCode == SQLITE_OK else {
+        throw sqliteError(
+          operation: "\(operation).finalize", database: database, code: finalizeCode)
+      }
+      return result
+    } catch let primaryError {
+      let finalizeCode = sqlite3_finalize(statement)
+      guard finalizeCode == SQLITE_OK else {
+        throw CatalogStoreError.cleanup(
+          operation: "\(operation).finalize",
+          primaryError: String(describing: primaryError),
+          cleanupError: sqliteError(
+            operation: "\(operation).finalize", database: database, code: finalizeCode
+          ).localizedDescription
+        )
+      }
+      throw primaryError
     }
   }
 
   private static func tableExists(_ database: OpaquePointer, name: String) throws -> Bool {
-    var statement: OpaquePointer?
-    let code = sqlite3_prepare_v2(
+    try withStaticStatement(
       database,
-      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1;",
-      -1,
-      &statement,
-      nil
-    )
+      sql: "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1;",
+      operation: "catalog.migrate.tableExists"
+    ) { statement in
+      let bindCode = sqlite3_bind_text(statement, 1, name, -1, sqliteTransient)
+      guard bindCode == SQLITE_OK else {
+        throw sqliteError(
+          operation: "catalog.migrate.tableExists.bind", database: database, code: bindCode)
+      }
+      let stepCode = sqlite3_step(statement)
+      if stepCode == SQLITE_ROW { return true }
+      if stepCode == SQLITE_DONE { return false }
+      throw sqliteError(
+        operation: "catalog.migrate.tableExists.step", database: database, code: stepCode)
+    }
+  }
+
+  private static func validateVersionOneSchema(
+    _ database: OpaquePointer,
+    shouldUseFTS: Bool
+  ) throws -> Bool {
+    let requiredColumns: [String: Set<String>] = [
+      "assets": [
+        "id", "source_url", "filename", "type_identifier", "fingerprint_json", "import_ms",
+        "capture_ms", "dimensions_json", "rating", "color_label", "is_missing",
+      ],
+      "edit_recipes": ["asset_id", "revision", "date_ms", "recipe_json"],
+      "catalog_jobs": ["id", "created_ms", "updated_ms", "job_json"],
+      "asset_bookmarks": ["asset_id", "bookmark", "updated_ms"],
+    ]
+    for (table, expected) in requiredColumns {
+      guard try tableExists(database, name: table) else {
+        throw schemaError("The required table '\(table)' is missing.")
+      }
+      let actual = try tableColumns(database, table: table)
+      guard expected.isSubset(of: actual) else {
+        throw schemaError("The table '\(table)' does not contain the required version-1 columns.")
+      }
+    }
+    for index in [
+      "assets_import_ms_index", "assets_capture_ms_index", "assets_filename_index",
+      "catalog_jobs_updated_ms_index",
+    ] {
+      guard try indexExists(database, name: index) else {
+        throw schemaError("The required index '\(index)' is missing.")
+      }
+    }
+    try validateForeignKey(
+      database, table: "edit_recipes", column: "asset_id", referencedTable: "assets")
+    try validateForeignKey(
+      database, table: "asset_bookmarks", column: "asset_id", referencedTable: "assets")
+
+    let ftsAvailable: Bool
+    if shouldUseFTS {
+      ftsAvailable = try tableExists(database, name: "asset_search")
+    } else {
+      ftsAvailable = false
+    }
+    let queries =
+      [
+        "SELECT id, source_url, filename, type_identifier, fingerprint_json, import_ms, capture_ms, dimensions_json, rating, color_label, is_missing FROM assets WHERE id = ?;",
+        "SELECT recipe_json FROM edit_recipes WHERE asset_id = ? ORDER BY revision DESC, date_ms DESC LIMIT 1;",
+        "SELECT job_json FROM catalog_jobs ORDER BY updated_ms DESC, id ASC;",
+        "SELECT bookmark FROM asset_bookmarks WHERE asset_id = ?;",
+      ]
+      + (ftsAvailable
+        ? [
+          "SELECT assets.id FROM asset_search JOIN assets ON assets.id = asset_search.asset_id WHERE asset_search MATCH ? LIMIT 1;"
+        ] : [])
+    for query in queries {
+      try validateQuery(database, sql: query)
+    }
+    return ftsAvailable
+  }
+
+  private static func indexExists(_ database: OpaquePointer, name: String) throws -> Bool {
+    try withStaticStatement(
+      database,
+      sql: "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ? LIMIT 1;",
+      operation: "catalog.validate.index"
+    ) { statement in
+      let bindCode = sqlite3_bind_text(statement, 1, name, -1, sqliteTransient)
+      guard bindCode == SQLITE_OK else {
+        throw sqliteError(
+          operation: "catalog.validate.index.bind", database: database, code: bindCode)
+      }
+      let stepCode = sqlite3_step(statement)
+      if stepCode == SQLITE_ROW { return true }
+      if stepCode == SQLITE_DONE { return false }
+      throw sqliteError(
+        operation: "catalog.validate.index.step", database: database, code: stepCode)
+    }
+  }
+
+  private static func tableColumns(_ database: OpaquePointer, table: String) throws -> Set<String> {
+    var statement: OpaquePointer?
+    let code = sqlite3_prepare_v2(database, "PRAGMA table_info(\(table));", -1, &statement, nil)
     guard code == SQLITE_OK, let statement else {
       throw sqliteError(
-        operation: "catalog.migrate.tableExists.prepare", database: database, code: code)
+        operation: "catalog.validate.columns.prepare", database: database, code: code)
     }
     defer { _ = sqlite3_finalize(statement) }
-    let bindCode = sqlite3_bind_text(statement, 1, name, -1, sqliteTransient)
-    guard bindCode == SQLITE_OK else {
-      throw sqliteError(
-        operation: "catalog.migrate.tableExists.bind", database: database, code: bindCode)
+    var columns: Set<String> = []
+    while true {
+      let stepCode = sqlite3_step(statement)
+      if stepCode == SQLITE_DONE { return columns }
+      guard stepCode == SQLITE_ROW else {
+        throw sqliteError(
+          operation: "catalog.validate.columns.step", database: database, code: stepCode)
+      }
+      guard let name = sqlite3_column_text(statement, 1) else {
+        throw schemaError("A schema column name is NULL.")
+      }
+      columns.insert(String(cString: name))
     }
-    let stepCode = sqlite3_step(statement)
-    if stepCode == SQLITE_ROW { return true }
-    if stepCode == SQLITE_DONE { return false }
-    throw sqliteError(
-      operation: "catalog.migrate.tableExists.step", database: database, code: stepCode)
+  }
+
+  private static func validateForeignKey(
+    _ database: OpaquePointer,
+    table: String,
+    column: String,
+    referencedTable: String
+  ) throws {
+    var statement: OpaquePointer?
+    let code = sqlite3_prepare_v2(
+      database, "PRAGMA foreign_key_list(\(table));", -1, &statement, nil)
+    guard code == SQLITE_OK, let statement else {
+      throw sqliteError(
+        operation: "catalog.validate.foreignKey.prepare", database: database, code: code)
+    }
+    defer { _ = sqlite3_finalize(statement) }
+    while true {
+      let stepCode = sqlite3_step(statement)
+      if stepCode == SQLITE_DONE { break }
+      guard stepCode == SQLITE_ROW else {
+        throw sqliteError(
+          operation: "catalog.validate.foreignKey.step", database: database, code: stepCode)
+      }
+      let target = sqlite3_column_text(statement, 2).map { String(cString: $0) }
+      let source = sqlite3_column_text(statement, 3).map { String(cString: $0) }
+      if source == column && target == referencedTable { return }
+    }
+    throw schemaError("The table '\(table)' does not have the required foreign key.")
+  }
+
+  private static func validateQuery(_ database: OpaquePointer, sql: String) throws {
+    var statement: OpaquePointer?
+    let code = sqlite3_prepare_v2(database, sql, -1, &statement, nil)
+    guard code == SQLITE_OK, let statement else {
+      throw sqliteError(operation: "catalog.validate.query", database: database, code: code)
+    }
+    let finalizeCode = sqlite3_finalize(statement)
+    guard finalizeCode == SQLITE_OK else {
+      throw sqliteError(
+        operation: "catalog.validate.query.finalize", database: database, code: finalizeCode)
+    }
+  }
+
+  private static func schemaError(_ message: String) -> CatalogStoreError {
+    CatalogStoreError.unsupported(operation: "catalog.validate", message: message)
   }
 
   private static func scalarInt(_ database: OpaquePointer, sql: String, operation: String) throws
     -> Int64
   {
-    var statement: OpaquePointer?
-    let code = sqlite3_prepare_v2(database, sql, -1, &statement, nil)
-    guard code == SQLITE_OK, let statement else {
-      throw sqliteError(operation: "\(operation).prepare", database: database, code: code)
+    try withStaticStatement(database, sql: sql, operation: operation) { statement in
+      let stepCode = sqlite3_step(statement)
+      guard stepCode == SQLITE_ROW else {
+        throw sqliteError(operation: "\(operation).step", database: database, code: stepCode)
+      }
+      return sqlite3_column_int64(statement, 0)
     }
-    defer { _ = sqlite3_finalize(statement) }
-    let stepCode = sqlite3_step(statement)
-    guard stepCode == SQLITE_ROW else {
-      throw sqliteError(operation: "\(operation).step", database: database, code: stepCode)
+  }
+
+  private static func scalarString(_ database: OpaquePointer, sql: String, operation: String) throws
+    -> String
+  {
+    try withStaticStatement(database, sql: sql, operation: operation) { statement in
+      let stepCode = sqlite3_step(statement)
+      guard stepCode == SQLITE_ROW, let value = sqlite3_column_text(statement, 0) else {
+        throw sqliteError(operation: "\(operation).step", database: database, code: stepCode)
+      }
+      return String(cString: value)
     }
-    return sqlite3_column_int64(statement, 0)
   }
 
   private static func execute(_ sql: String, database: OpaquePointer, operation: String) throws {
