@@ -35,7 +35,8 @@ contains these tested components:
 - an offline Core ML model-pack manifest/loader registry with checksum,
   licence, memory, and speed gates; and
 - durable face annotations with validated regions, optional labels, search,
-  delete, and schema-v7 catalog migration; and
+  delete, schema-v7 catalog migration, and local Vision face-rectangle
+  detection that produces unlabeled geometry; and
 - ImageCaptureCore camera discovery/status/events, tethered capture request
   plumbing, and watched-folder import with settling and duplicate detection;
   and
@@ -75,8 +76,8 @@ vendor camera SDK adapters, print templates and soft proofing, hosted
 publishing, plug-in hosting, Adobe migration, AI features beyond the
 verified Vision subset, texture-aware retouching, and production support for
 the full range of Lightroom formats remain incomplete. Embedded XMP writing, full
-metadata batch editing, complete keyword-taxonomy authoring, face detection and
-people UI, and full virtual-copy batch/export workflow support are also incomplete.
+metadata batch editing, complete keyword-taxonomy authoring, people UI, identity
+recognition, and full virtual-copy batch/export workflow support are also incomplete.
 Durable face regions and labels are available without identity recognition. An atomic XMP
 sidecar writer/reader and a bounded standards-based Adobe XMP Develop-preset
 importer exist as tested interoperability cores, but proprietary Lightroom
