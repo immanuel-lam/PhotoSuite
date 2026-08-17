@@ -206,6 +206,7 @@ private struct TetherStatusView: View {
   @State private var nativeDevices: [CaptureDeviceStatus] = []
   @State private var discovery: ImageCaptureCoreCameraDiscovery?
   @State private var cameraError: String?
+  @State private var importReview: LibraryImportReview?
 
   var body: some View {
     ProfessionalStatusSurface(
@@ -274,14 +275,37 @@ private struct TetherStatusView: View {
         discovery = adapter
         adapter.start()
         nativeDevices = adapter.devices
-        for await _ in adapter.makeEventStream() {
+        for await change in adapter.makeEventStream() {
           nativeDevices = adapter.devices
+          if case .mediaAdded(let deviceID, let items) = change {
+            importReview = LibraryImportReview(
+              deviceID: deviceID,
+              mediaItems: items,
+              existingAssets: workspace.assets
+            )
+          }
         }
       #endif
     }
     .onDisappear {
       discovery?.stop()
       discovery = nil
+    }
+    .sheet(item: $importReview) { review in
+      LibraryImportReviewView(
+        review: review,
+        onImport: { items in
+          let urls = items.compactMap(\.fileURL)
+          guard !urls.isEmpty else {
+            cameraError = "The camera did not provide local file URLs for the selected media."
+            return
+          }
+          Task { @MainActor in
+            await workspace.importURLs(urls)
+          }
+        },
+        onCancel: {}
+      )
     }
   }
 
