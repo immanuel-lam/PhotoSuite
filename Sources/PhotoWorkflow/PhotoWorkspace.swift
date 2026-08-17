@@ -26,6 +26,7 @@ public final class PhotoWorkspace {
   public var isLoading = false
   public var isExporting = false
   public var isImporting = false
+  public var isRelinking = false
   public var isChoosingExportDestination = false
   public var proofMode = false
   public var showsBefore = false
@@ -486,6 +487,66 @@ public final class PhotoWorkspace {
       syncDraftValues()
     }
     isLoading = false
+  }
+
+  /// Relinks one missing catalog asset to an unchanged local source file.
+  ///
+  /// The replacement URL is accessed inside the caller-provided security scope while
+  /// its fingerprint is calculated. The catalog owns durable bookmark creation and
+  /// the original source file is never modified.
+  @discardableResult
+  public func relinkAsset(
+    assetID: UUID,
+    to replacementURL: URL
+  ) async throws -> CatalogRelinkAssetResult {
+    guard let asset = assets.first(where: { $0.id == assetID }) else {
+      throw MissingSourceRelinkError.assetNotFound(assetID)
+    }
+    let plan = MissingSourceRelinkPlan(asset: asset)
+    guard plan.isMissing else {
+      throw MissingSourceRelinkError.assetNotMissing(assetID)
+    }
+    isRelinking = true
+    defer { isRelinking = false }
+
+    let started = await sourceAccess.start(replacementURL)
+    guard started else {
+      throw MissingSourceRelinkError.sourceScopeUnavailable(replacementURL)
+    }
+    do {
+      let replacementFingerprint = try await fingerprint(replacementURL)
+      try plan.validate(
+        replacementURL: replacementURL,
+        actualFingerprint: replacementFingerprint
+      )
+      let result = try await catalog.relinkAsset(
+        CatalogRelinkAssetRequest(
+          assetID: asset.id,
+          sourceURL: replacementURL,
+          filename: replacementURL.lastPathComponent,
+          typeIdentifier: asset.typeIdentifier,
+          fingerprint: replacementFingerprint
+        )
+      )
+      await sourceAccess.stop(replacementURL)
+
+      if let index = assets.firstIndex(where: { $0.id == result.asset.id }) {
+        assets[index] = result.asset
+      }
+      previewCache.removeValue(forKey: result.asset.id)
+      if selectedAssetID == result.asset.id {
+        preview = nil
+        if currentRecipe != nil {
+          await refreshPreview()
+        }
+      }
+      errorMessage = nil
+      lastError = nil
+      return result
+    } catch {
+      await sourceAccess.stop(replacementURL)
+      throw error
+    }
   }
 
   public func selectAsset(_ assetID: UUID) async {

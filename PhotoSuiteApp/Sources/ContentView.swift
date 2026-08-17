@@ -14,6 +14,7 @@ struct ContentView: View {
   @AppStorage("jpegQuality") private var jpegQuality = 0.9
   @State private var inspectorPresented = false
   @State private var importReview: LibraryImportReview?
+  @State private var missingSourceAsset: PhotoAsset?
   private let sidebarWidth: CGFloat = 300
 
   var body: some View {
@@ -22,12 +23,17 @@ struct ContentView: View {
         .ignoresSafeArea()
 
       if workspace.section == .library {
-        WorkspaceSidebar(workspace: workspace)
-          .frame(width: sidebarWidth)
-          .padding(.leading, 14)
-          .padding(.vertical, 14)
-          .transition(.move(edge: .leading).combined(with: .opacity))
-          .zIndex(2)
+        WorkspaceSidebar(
+          workspace: workspace,
+          onRelinkMissing: { asset in
+            missingSourceAsset = asset
+          }
+        )
+        .frame(width: sidebarWidth)
+        .padding(.leading, 14)
+        .padding(.vertical, 14)
+        .transition(.move(edge: .leading).combined(with: .opacity))
+        .zIndex(2)
       }
     }
     .overlay(alignment: .topTrailing) {
@@ -68,6 +74,14 @@ struct ContentView: View {
         onCancel: {}
       )
     }
+    .sheet(item: $missingSourceAsset) { asset in
+      MissingSourceRelinkView(
+        asset: asset,
+        onRelink: { replacementURL in
+          _ = try await workspace.relinkAsset(assetID: asset.id, to: replacementURL)
+        }
+      )
+    }
     .onChange(of: workspace.section, initial: true) { _, section in
       inspectorPresented = section == .develop
     }
@@ -90,7 +104,13 @@ struct ContentView: View {
   private var workspaceContent: some View {
     switch workspace.section {
     case .library:
-      LibraryView(workspace: workspace, sidebarWidth: sidebarWidth)
+      LibraryView(
+        workspace: workspace,
+        sidebarWidth: sidebarWidth,
+        onRelinkMissing: { asset in
+          missingSourceAsset = asset
+        }
+      )
     case .develop:
       DevelopView(workspace: workspace)
     case .deliver:

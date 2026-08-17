@@ -11,6 +11,7 @@ import SwiftUI
 @MainActor
 struct WorkspaceSidebar: View {
   @Bindable var workspace: PhotoWorkspace
+  let onRelinkMissing: @MainActor (PhotoAsset) -> Void
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
@@ -411,7 +412,18 @@ extension WorkspaceSection {
 struct LibraryView: View {
   @Bindable var workspace: PhotoWorkspace
   let sidebarWidth: CGFloat
+  let onRelinkMissing: @MainActor (PhotoAsset) -> Void
   private let columns = [GridItem(.adaptive(minimum: 240, maximum: 380), spacing: 14)]
+
+  init(
+    workspace: PhotoWorkspace,
+    sidebarWidth: CGFloat,
+    onRelinkMissing: @escaping @MainActor (PhotoAsset) -> Void = { _ in }
+  ) {
+    self.workspace = workspace
+    self.sidebarWidth = sidebarWidth
+    self.onRelinkMissing = onRelinkMissing
+  }
 
   var body: some View {
     ZStack {
@@ -477,6 +489,14 @@ struct LibraryView: View {
                           workspace.addAsset(asset.id, toCollection: collection.id)
                         }
                       }
+                    }
+                  }
+                  if asset.isMissing {
+                    Divider()
+                    Button {
+                      onRelinkMissing(asset)
+                    } label: {
+                      Label("Relink Missing Source…", systemImage: "arrow.triangle.2.circlepath")
                     }
                   }
                 }
