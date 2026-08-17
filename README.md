@@ -22,8 +22,8 @@ contains these tested components:
 - durable ordered recipes for basic Develop controls, baseline tone,
   white-balance, transform, detail, optics, effects, calibration,
   black-and-white, and HDR-intent operations; and
-- atomic sRGB JPEG delivery with tested resize, metadata, text-watermark,
-  and output-sharpening options; and
+- atomic JPEG, PNG, HEIF, and TIFF delivery with tested resize, metadata,
+  text-watermark, output-sharpening, and sequential batch-export options; and
 - MapKit GPS markers, AVFoundation device discovery, native print routing,
   and explicit unavailable-state previews for book, slideshow, web gallery,
   plug-in, Adobe migration, and tethered-capture features.
@@ -35,21 +35,23 @@ a JPEG through Deliver. Session collections and stacks are not durable.
 The baseline controls and mask contracts are pre-alpha workflow evidence;
 they are not a Lightroom-equivalent implementation.
 
-Mask data, authoring, duplicate/synchronise requests, and stale-result
-validation exist, but mask rasterisation, local-adjustment compositing,
-healing, and red-eye remain incomplete. AI contracts and status controls
-exist, but no verified model pack, inference, or generative function exists.
+Mask data, authoring, duplicate/synchronise requests, stale-result validation,
+deterministic rasterisation, graph composition, masked exposure, and masked
+colour grading exist. AI segmentation, real depth data, healing, clone,
+red-eye, and generative functions remain incomplete. AI contracts and status
+controls exist, but no verified model pack or inference exists.
 A common-image preview fallback is available when a source is not accepted
 as RAW; this is not a supported-camera list. A licensed real RAW fixture is
 absent, so the real RAW fixture test is skipped.
 
 The project has no Lightroom parity claim. Full tethered capture, print
 templates and soft proofing, book export, web publishing, plug-in hosting,
-Adobe migration, AI execution, healing, and production support for other
-formats remain incomplete. Cloud services, mobile clients, and web editing
-are out of scope. There is no signed, notarized, reproducible, or published
-application release. Do not use this pre-alpha revision for production
-photographs.
+Adobe migration, AI execution, healing, and production support for the full
+range of Lightroom formats remain incomplete. Metadata inspector and batch
+metadata UI, embedded/sidecar XMP writing, and hierarchical keyword tools are
+also incomplete. Cloud services, mobile clients, and web editing are out of
+scope. There is no signed, notarized, reproducible, or published application
+release. Do not use this pre-alpha revision for production photographs.
 
 The comparison baseline is Adobe Lightroom Classic 15.4.1. PhotoSuite
 does not claim feature, file-format, performance, workflow, plug-in, or
