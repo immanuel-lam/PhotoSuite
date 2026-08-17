@@ -5,24 +5,23 @@
 The public pre-alpha CI builds an unsigned debug application and tests the
 native catalog, render, and early workflow code. The latest recorded public
 success is commit
-[`bff9a3045361d1d854355d7dd5eed09723af1f34`](https://github.com/immanuel-lam/PhotoSuite/actions/runs/32037662134)
-on 17 August 2026. It proves that the earlier unsigned-build configuration
-completed on a macOS 15 Arm64 runner. It does not prove release
+[`b4962decee30adafad895fa8095c1e918cabbd39`](https://github.com/immanuel-lam/PhotoSuite/actions/runs/32043696443)
+on 18 August 2026. It proves that the unsigned-build and checked-in SBOM
+steps completed on a macOS 15 Arm64 runner. It does not prove release
 reproducibility, signing, notarization, or installed-artifact behaviour.
 
 CI now also validates the checked-in SBOM generator contract and runs a pinned
 Syft generator. It creates CycloneDX JSON, SPDX JSON, and `SHA256SUMS` in the
-job workspace, but does not upload or publish them. No public CI result has yet
-recorded this SBOM step. No independent clean-build comparison has been
-recorded. Therefore, PhotoSuite does not claim that builds are reproducible and
-does not publish an SBOM artifact.
+job workspace, but does not upload or publish them. No independent clean-build
+comparison has been recorded. Therefore, PhotoSuite does not claim that builds
+are reproducible and does not publish an SBOM artifact.
 
 ## Public CI evidence
 
 Use a public Actions result only for the exact commit and completed steps that
-it displays. The recorded success above predates the checked-in SBOM workflow,
-so it is not SBOM evidence. A future public result can provide pre-alpha CI
-evidence only after it completes all of these steps for the reviewed commit:
+it displays. The recorded success above is SBOM evidence for that exact
+commit, but it is not release evidence. A public result can provide pre-alpha
+CI evidence only after it completes all of these steps for the reviewed commit:
 
 1. Validate workflow contract.
 2. Test CI verification script.
