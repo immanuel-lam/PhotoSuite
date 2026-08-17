@@ -23,7 +23,7 @@ final class RenderGraphTests: XCTestCase {
   func testExposureChangesRenderedPixel() async throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
-    let decoder = try AppleRawDecoder()
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
     let baseline = try await decoder.preview(
       sourceURL: fixture.source,
       recipe: makeRecipe(),
@@ -44,7 +44,7 @@ final class RenderGraphTests: XCTestCase {
   func testNormalizedZeroAdjustmentsAreIdentityOperations() async throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
-    let decoder = try AppleRawDecoder()
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
     let baseline = try await decoder.preview(
       sourceURL: fixture.source,
       recipe: makeRecipe(),
@@ -67,7 +67,7 @@ final class RenderGraphTests: XCTestCase {
   func testHighlightAndShadowDeltasSelectDifferentTonalRanges() async throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
-    let decoder = try AppleRawDecoder()
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
     let baseline = try await decoder.preview(
       sourceURL: fixture.source,
       recipe: makeRecipe(),
@@ -104,7 +104,7 @@ final class RenderGraphTests: XCTestCase {
   func testCropUsesTopLeftFloorCeilEdgesAndExactDimensions() async throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
-    let decoder = try AppleRawDecoder()
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
     let crop = try XCTUnwrap(NormalizedRect(x: 0.24, y: 0, width: 0.51, height: 0.5))
 
     let image = try await decoder.preview(
@@ -120,7 +120,7 @@ final class RenderGraphTests: XCTestCase {
   func testQuarterTurnRotationUsesExactDimensions() async throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
-    let decoder = try AppleRawDecoder()
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
 
     let quarter = try await decoder.preview(
       sourceURL: fixture.source,
@@ -142,7 +142,7 @@ final class RenderGraphTests: XCTestCase {
   func testThreeQuarterTurnUsesExactDimensions() async throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
-    let decoder = try AppleRawDecoder()
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
 
     let image = try await decoder.preview(
       sourceURL: fixture.source,
@@ -156,7 +156,7 @@ final class RenderGraphTests: XCTestCase {
   func testArbitraryRotationUsesFullIntegralBoundingBox() async throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
-    let decoder = try AppleRawDecoder()
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
 
     let image = try await decoder.preview(
       sourceURL: fixture.source,
@@ -170,7 +170,7 @@ final class RenderGraphTests: XCTestCase {
   func testNearQuarterTurnUsesArbitraryRotationPath() async throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
-    let decoder = try AppleRawDecoder()
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
 
     let recipe = makeRecipe(operations: [.rotationDegrees(90.000_000_05)])
     let sourceImage = try XCTUnwrap(
@@ -191,7 +191,7 @@ final class RenderGraphTests: XCTestCase {
   func testRecipeOrderChangesGeometry() async throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
-    let decoder = try AppleRawDecoder()
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
     let leftHalf = try XCTUnwrap(NormalizedRect(x: 0, y: 0, width: 0.5, height: 1))
 
     let cropThenRotate = try await decoder.preview(
@@ -212,7 +212,7 @@ final class RenderGraphTests: XCTestCase {
   func testRecipeOrderChangesRenderedPixelsAtEqualDimensions() async throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
-    let decoder = try AppleRawDecoder()
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
 
     let exposureThenHighlights = try await decoder.preview(
       sourceURL: fixture.source,
@@ -236,7 +236,7 @@ final class RenderGraphTests: XCTestCase {
   func testUnknownOperationReturnsIndexedTypedError() async throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
-    let decoder = try AppleRawDecoder()
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
 
     do {
       _ = try await decoder.preview(
@@ -255,7 +255,7 @@ final class RenderGraphTests: XCTestCase {
   func testNormalizedDeltaOutsideUnitRangeReturnsIndexedTypedError() async throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
-    let decoder = try AppleRawDecoder()
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
 
     do {
       _ = try await decoder.preview(
@@ -272,7 +272,7 @@ final class RenderGraphTests: XCTestCase {
   func testExposureThatOverflowsFloatReturnsIndexedTypedError() async throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
-    let decoder = try AppleRawDecoder()
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
 
     do {
       _ = try await decoder.preview(
@@ -289,7 +289,7 @@ final class RenderGraphTests: XCTestCase {
   func testUnsupportedRenderSchemaVersionReturnsTypedError() async throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
-    let decoder = try AppleRawDecoder()
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
     let recipe = EditRecipe(
       assetID: UUID(),
       pins: EnginePins(

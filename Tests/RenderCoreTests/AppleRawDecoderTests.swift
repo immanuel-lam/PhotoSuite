@@ -13,7 +13,7 @@ import XCTest
 
 final class AppleRawDecoderTests: XCTestCase {
   func testWorkingColorSpaceUsesExtendedRange() async throws {
-    let decoder = try AppleRawDecoder()
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
 
     let colorSpace = await decoder.workingColorSpace
 
@@ -23,8 +23,8 @@ final class AppleRawDecoderTests: XCTestCase {
   func testCommonImageFallbackReturnsOrientedPixelsAndStableDecoderIdentity() async throws {
     let directory = try DeterministicImageFixture.makeDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
-    let source = try DeterministicImageFixture.makePNG(in: directory)
-    let decoder = try AppleRawDecoder()
+    let source = try DeterministicImageFixture.makePNG(in: directory, name: "common.dng")
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
 
     let result = try await decoder.decode(RawDecodeRequest(sourceURL: source))
 
@@ -37,7 +37,7 @@ final class AppleRawDecoderTests: XCTestCase {
   }
 
   func testCapabilitiesComeFromCIRAWFilterWithoutGlobalDecoderVersionClaim() async throws {
-    let decoder = try AppleRawDecoder()
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
 
     let result = try await decoder.capabilities(RawCapabilityRequest())
 
@@ -49,7 +49,7 @@ final class AppleRawDecoderTests: XCTestCase {
     let directory = try DeterministicImageFixture.makeDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
     let source = try DeterministicImageFixture.makePNG(in: directory)
-    let decoder = try AppleRawDecoder()
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
 
     let result = try await decoder.capabilities(RawCapabilityRequest(sourceURL: source))
 
@@ -66,41 +66,72 @@ final class AppleRawDecoderTests: XCTestCase {
       CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [CFString: Any]
     )
     XCTAssertEqual((properties[kCGImagePropertyOrientation] as? NSNumber)?.intValue, 6)
-    let decoder = try AppleRawDecoder()
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
 
     let result = try await decoder.decode(RawDecodeRequest(sourceURL: source))
 
     XCTAssertEqual(result.image.dimensions, PixelDimensions(width: 3, height: 2))
-    let rowDominance = (0..<2).map { row -> String in
-      let pixels = (0..<3).map {
-        DeterministicImageFixture.pixel(
-          x: $0,
-          y: row,
-          width: 3,
-          in: result.image.data
-        )
-      }
-      let red = pixels.reduce(0) { $0 + Int($1.red) }
-      let blue = pixels.reduce(0) { $0 + Int($1.blue) }
-      return red > blue ? "red" : "blue"
+    for x in 0..<3 {
+      let bottom = DeterministicImageFixture.pixel(
+        x: x,
+        y: 0,
+        width: 3,
+        in: result.image.data
+      )
+      let top = DeterministicImageFixture.pixel(
+        x: x,
+        y: 1,
+        width: 3,
+        in: result.image.data
+      )
+      XCTAssertGreaterThan(bottom.red, bottom.blue)
+      XCTAssertGreaterThan(top.blue, top.red)
     }
-    XCTAssertEqual(Set(rowDominance), Set(["red", "blue"]))
   }
 
-  func testCreatedRAWFilterReportsItsExactVersionsAndInvalidOutputIsCorrupt() async throws {
+  func testCreatedRAWFilterIsAuthorityIndependentOfFilenameExtension() async throws {
     let directory = try DeterministicImageFixture.makeDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
-    let source = directory.appendingPathComponent("invalid.dng")
-    try Data("not a valid raw payload".utf8).write(to: source)
-    let raw = try XCTUnwrap(CIRAWFilter(imageURL: source))
-    let exactVersions = raw.supportedDecoderVersions.map(\.rawValue)
-    let decoder = try AppleRawDecoder()
+    let imageURL = try DeterministicImageFixture.makePNG(in: directory)
+    let image = try XCTUnwrap(CIImage(contentsOf: imageURL))
+    let source = directory.appendingPathComponent("camera-payload.bin")
+    try Data("provider owns RAW identification".utf8).write(to: source)
+    let filter = StubAppleRAWFilter(
+      supportedDecoderVersions: ["raw-v1", "raw-v2"],
+      decoderVersion: "raw-v1",
+      outputImage: image
+    )
+    let decoder = try AppleRawDecoder(
+      rawFilterProvider: StubAppleRAWFilterProvider(filter: filter)
+    )
 
     let capabilities = try await decoder.capabilities(
       RawCapabilityRequest(sourceURL: source)
     )
 
-    XCTAssertEqual(capabilities.supportedDecoderVersions, exactVersions)
+    let result = try await decoder.decode(
+      RawDecodeRequest(sourceURL: source, decoderVersion: "raw-v2")
+    )
+
+    XCTAssertEqual(capabilities.supportedDecoderVersions, ["raw-v1", "raw-v2"])
+    XCTAssertEqual(result.decoderIdentifier, "com.apple.ciraw")
+    XCTAssertEqual(result.decoderVersion, "raw-v2")
+    XCTAssertEqual(result.image.dimensions, PixelDimensions(width: 8, height: 6))
+  }
+
+  func testCreatedRAWFilterWithMissingOutputIsCorruptWithoutCommonFallback() async throws {
+    let directory = try DeterministicImageFixture.makeDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let source = try DeterministicImageFixture.makePNG(in: directory)
+    let filter = StubAppleRAWFilter(
+      supportedDecoderVersions: ["raw-v1"],
+      decoderVersion: "raw-v1",
+      outputImage: nil
+    )
+    let decoder = try AppleRawDecoder(
+      rawFilterProvider: StubAppleRAWFilterProvider(filter: filter)
+    )
+
     do {
       _ = try await decoder.decode(RawDecodeRequest(sourceURL: source))
       XCTFail("Expected corrupt RAW error")
@@ -117,7 +148,7 @@ final class AppleRawDecoderTests: XCTestCase {
       0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
       0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
     ]).write(to: source)
-    let decoder = try AppleRawDecoder()
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
 
     do {
       _ = try await decoder.decode(RawDecodeRequest(sourceURL: source))
@@ -132,7 +163,7 @@ final class AppleRawDecoderTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: directory) }
     let source = directory.appendingPathComponent("not-an-image.bin")
     try Data("not an image".utf8).write(to: source)
-    let decoder = try AppleRawDecoder()
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
 
     do {
       _ = try await decoder.decode(RawDecodeRequest(sourceURL: source))
@@ -171,5 +202,36 @@ final class AppleRawDecoderTests: XCTestCase {
       raw.supportedDecoderVersions.map(\.rawValue)
     )
     XCTAssertGreaterThan(result.image.data.count, 0)
+  }
+}
+
+private final class StubAppleRAWFilter: AppleRAWFilterAccess {
+  let supportedDecoderVersions: [String]
+  private(set) var decoderVersion: String
+  let outputImage: CIImage?
+  let properties: [AnyHashable: Any] = [:]
+
+  init(
+    supportedDecoderVersions: [String],
+    decoderVersion: String,
+    outputImage: CIImage?
+  ) {
+    self.supportedDecoderVersions = supportedDecoderVersions
+    self.decoderVersion = decoderVersion
+    self.outputImage = outputImage
+  }
+
+  func selectDecoderVersion(_ version: String) -> Bool {
+    guard supportedDecoderVersions.contains(version) else { return false }
+    decoderVersion = version
+    return true
+  }
+}
+
+private struct StubAppleRAWFilterProvider: AppleRAWFilterProviding {
+  let filter: StubAppleRAWFilter
+
+  func makeFilter(imageURL: URL) -> (any AppleRAWFilterAccess)? {
+    filter
   }
 }

@@ -14,7 +14,7 @@ final class PreviewTests: XCTestCase {
   func testPreviewFitsBoundWithoutChangingAspectRatio() async throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
-    let decoder = try AppleRawDecoder()
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
 
     let image = try await decoder.preview(
       sourceURL: fixture.source,
@@ -29,7 +29,7 @@ final class PreviewTests: XCTestCase {
   func testPreviewNeverUpscales() async throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
-    let decoder = try AppleRawDecoder()
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
 
     let image = try await decoder.preview(
       sourceURL: fixture.source,
@@ -45,7 +45,7 @@ final class PreviewTests: XCTestCase {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
     let checksum = try DeterministicImageFixture.checksum(of: fixture.source)
-    let decoder = try AppleRawDecoder()
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
 
     _ = try await decoder.preview(
       sourceURL: fixture.source,
@@ -59,7 +59,7 @@ final class PreviewTests: XCTestCase {
   func testPreviewScalesTheEditedGraph() async throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
-    let decoder = try AppleRawDecoder()
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
     let leftHalf = try XCTUnwrap(NormalizedRect(x: 0, y: 0, width: 0.5, height: 1))
 
     let image = try await decoder.preview(
@@ -77,7 +77,7 @@ final class PreviewTests: XCTestCase {
   func testPreviewRejectsNonpositiveBound() async throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
-    let decoder = try AppleRawDecoder()
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
 
     do {
       _ = try await decoder.preview(
@@ -94,7 +94,7 @@ final class PreviewTests: XCTestCase {
   func testPreviewRejectsCommonImageDecoderVersionMismatch() async throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
-    let decoder = try AppleRawDecoder()
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
     let recipe = EditRecipe(
       assetID: UUID(),
       pins: EnginePins(
@@ -127,7 +127,7 @@ final class PreviewTests: XCTestCase {
   func testPreviewRejectsDecoderIdentifierMismatch() async throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
-    let decoder = try AppleRawDecoder()
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
     let recipe = EditRecipe(
       assetID: UUID(),
       pins: EnginePins(
@@ -160,7 +160,8 @@ final class PreviewTests: XCTestCase {
   func testRenderEngineProtocolReturnsBoundedPNGTransport() async throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
-    let engine: any RenderEngine = CoreImageRenderEngine(decoder: try AppleRawDecoder())
+    let engine: any RenderEngine = CoreImageRenderEngine(
+      decoder: try DeterministicImageFixture.makeCommonImageDecoder())
 
     let result = try await engine.render(
       RenderRequest(

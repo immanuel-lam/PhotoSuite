@@ -16,7 +16,7 @@ final class JPEGExportTests: XCTestCase {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
     let destination = fixture.directory.appendingPathComponent("export.jpg")
-    let decoder = try AppleRawDecoder()
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
     let exporter = AtomicJPEGExporter(decoder: decoder)
     let crop = try XCTUnwrap(NormalizedRect(x: 0, y: 0, width: 0.5, height: 1))
     let recipe = makeRecipe(operations: [.normalizedCrop(crop), .rotationDegrees(90)])
@@ -57,7 +57,7 @@ final class JPEGExportTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
     let destination = fixture.directory.appendingPathComponent("replace.jpg")
     try Data("old destination".utf8).write(to: destination)
-    let decoder = try AppleRawDecoder()
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
     let exporter = AtomicJPEGExporter(decoder: decoder)
 
     _ = try await exporter.export(
@@ -81,7 +81,7 @@ final class JPEGExportTests: XCTestCase {
     let oldDestination = Data("keep this destination".utf8)
     try oldDestination.write(to: destination)
     let sourceChecksum = try DeterministicImageFixture.checksum(of: fixture.source)
-    let decoder = try AppleRawDecoder()
+    let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
     let exporter = AtomicJPEGExporter(
       decoder: decoder,
       publisher: FailingAtomicFilePublisher()
@@ -113,7 +113,7 @@ final class JPEGExportTests: XCTestCase {
     try oldDestination.write(to: destination)
     let gate = SuspendedPublicationGate()
     let exporter = AtomicJPEGExporter(
-      decoder: try AppleRawDecoder(),
+      decoder: try DeterministicImageFixture.makeCommonImageDecoder(),
       publisher: SystemAtomicFilePublisher(),
       publicationGate: gate
     )
@@ -143,12 +143,49 @@ final class JPEGExportTests: XCTestCase {
     XCTAssertFalse(siblings.contains { $0.lastPathComponent.contains(".photosuite-tmp-") })
   }
 
+  func testCancellationCleanupFailureReturnsFusedTypedError() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let destination = fixture.directory.appendingPathComponent("cleanup-failure.jpg")
+    let oldDestination = Data("old destination must survive cleanup failure".utf8)
+    try oldDestination.write(to: destination)
+    let gate = SuspendedPublicationGate()
+    let exporter = AtomicJPEGExporter(
+      decoder: try DeterministicImageFixture.makeCommonImageDecoder(),
+      publisher: SystemAtomicFilePublisher(),
+      publicationGate: gate,
+      temporaryFileRemover: FailingTemporaryFileRemover()
+    )
+    let request = makeRequest(source: fixture.source, destination: destination)
+    let exportTask = Task { try await exporter.export(request) }
+    await gate.waitUntilEntered()
+    exportTask.cancel()
+    await gate.release()
+
+    do {
+      _ = try await exportTask.value
+      XCTFail("Expected fused cleanup error")
+    } catch let error as RenderCoreError {
+      guard case .cleanupFailed(let operation, let primaryError, let cleanupError) = error else {
+        return XCTFail("Expected typed cleanup error, got \(error)")
+      }
+      XCTAssertEqual(operation, "export.temporary.remove")
+      XCTAssertTrue(primaryError.contains("Cancellation"))
+      XCTAssertTrue(cleanupError.contains("injected cleanup failure"))
+    } catch {
+      XCTFail("Unexpected error: \(error)")
+    }
+
+    XCTAssertEqual(try Data(contentsOf: destination), oldDestination)
+  }
+
   func testSuccessfulExportDoesNotChangeSourceChecksum() async throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
     let destination = fixture.directory.appendingPathComponent("immutable.jpg")
     let checksum = try DeterministicImageFixture.checksum(of: fixture.source)
-    let exporter = AtomicJPEGExporter(decoder: try AppleRawDecoder())
+    let exporter = AtomicJPEGExporter(
+      decoder: try DeterministicImageFixture.makeCommonImageDecoder())
 
     _ = try await exporter.export(
       makeRequest(source: fixture.source, destination: destination)
@@ -166,7 +203,7 @@ final class JPEGExportTests: XCTestCase {
     let archive = fixture.directory.appendingPathComponent("validated-temporary.jpg")
     let tamperedDestination = Data("publisher changed destination after moving it".utf8)
     let exporter = AtomicJPEGExporter(
-      decoder: try AppleRawDecoder(),
+      decoder: try DeterministicImageFixture.makeCommonImageDecoder(),
       publisher: ArchivingMutatingPublisher(
         archiveURL: archive,
         replacementData: tamperedDestination
@@ -188,7 +225,8 @@ final class JPEGExportTests: XCTestCase {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
     let destination = fixture.directory.appendingPathComponent("rotation.jpg")
-    let exporter = AtomicJPEGExporter(decoder: try AppleRawDecoder())
+    let exporter = AtomicJPEGExporter(
+      decoder: try DeterministicImageFixture.makeCommonImageDecoder())
 
     _ = try await exporter.export(
       makeRequest(
@@ -211,7 +249,8 @@ final class JPEGExportTests: XCTestCase {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
     let destination = fixture.directory.appendingPathComponent("invalid.jpg")
-    let exporter = AtomicJPEGExporter(decoder: try AppleRawDecoder())
+    let exporter = AtomicJPEGExporter(
+      decoder: try DeterministicImageFixture.makeCommonImageDecoder())
 
     await assertExportError(
       exporter,
@@ -246,7 +285,8 @@ final class JPEGExportTests: XCTestCase {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
     let destination = fixture.directory.appendingPathComponent("pin-mismatch.jpg")
-    let exporter = AtomicJPEGExporter(decoder: try AppleRawDecoder())
+    let exporter = AtomicJPEGExporter(
+      decoder: try DeterministicImageFixture.makeCommonImageDecoder())
     let wrongIdentifierRecipe = EditRecipe(
       assetID: UUID(),
       pins: EnginePins(
@@ -365,6 +405,18 @@ private struct ArchivingMutatingPublisher: AtomicFilePublishing {
     try FileManager.default.copyItem(at: temporaryURL, to: archiveURL)
     try FileManager.default.moveItem(at: temporaryURL, to: destinationURL)
     try replacementData.write(to: destinationURL)
+  }
+}
+
+private struct FailingTemporaryFileRemover: TemporaryFileRemoving {
+  func removeItem(at url: URL) throws {
+    throw Failure.injectedCleanupFailure
+  }
+
+  enum Failure: Error, CustomStringConvertible {
+    case injectedCleanupFailure
+
+    var description: String { "injected cleanup failure" }
   }
 }
 

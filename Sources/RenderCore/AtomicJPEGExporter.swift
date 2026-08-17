@@ -13,8 +13,18 @@ protocol ExportPublicationGating: Sendable {
   func waitBeforePublication() async
 }
 
+protocol TemporaryFileRemoving: Sendable {
+  func removeItem(at url: URL) throws
+}
+
 struct ImmediateExportPublicationGate: ExportPublicationGating {
   func waitBeforePublication() async {}
+}
+
+struct SystemTemporaryFileRemover: TemporaryFileRemoving {
+  func removeItem(at url: URL) throws {
+    try FileManager.default.removeItem(at: url)
+  }
 }
 
 struct SystemAtomicFilePublisher: AtomicFilePublishing {
@@ -37,28 +47,33 @@ public struct AtomicJPEGExporter: Exporter, Sendable {
   private let decoder: AppleRawDecoder
   private let publisher: any AtomicFilePublishing
   private let publicationGate: any ExportPublicationGating
+  private let temporaryFileRemover: any TemporaryFileRemoving
 
   public init(decoder: AppleRawDecoder) {
     self.decoder = decoder
     self.publisher = SystemAtomicFilePublisher()
     self.publicationGate = ImmediateExportPublicationGate()
+    self.temporaryFileRemover = SystemTemporaryFileRemover()
   }
 
   init(
     decoder: AppleRawDecoder,
     publisher: any AtomicFilePublishing,
-    publicationGate: any ExportPublicationGating = ImmediateExportPublicationGate()
+    publicationGate: any ExportPublicationGating = ImmediateExportPublicationGate(),
+    temporaryFileRemover: any TemporaryFileRemoving = SystemTemporaryFileRemover()
   ) {
     self.decoder = decoder
     self.publisher = publisher
     self.publicationGate = publicationGate
+    self.temporaryFileRemover = temporaryFileRemover
   }
 
   public func export(_ request: ExportRequest) async throws -> ExportResult {
     try await decoder.exportJPEG(
       request,
       publisher: publisher,
-      publicationGate: publicationGate
+      publicationGate: publicationGate,
+      temporaryFileRemover: temporaryFileRemover
     )
   }
 }

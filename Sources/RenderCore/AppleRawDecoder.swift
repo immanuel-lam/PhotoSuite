@@ -12,6 +12,53 @@ import Metal
 import PhotoDomain
 import UniformTypeIdentifiers
 
+protocol AppleRAWFilterAccess: AnyObject {
+  var supportedDecoderVersions: [String] { get }
+  var decoderVersion: String { get }
+  var outputImage: CIImage? { get }
+  var properties: [AnyHashable: Any] { get }
+
+  func selectDecoderVersion(_ version: String) -> Bool
+}
+
+protocol AppleRAWFilterProviding {
+  func makeFilter(imageURL: URL) -> (any AppleRAWFilterAccess)?
+}
+
+private final class SystemAppleRAWFilter: AppleRAWFilterAccess {
+  private let filter: CIRAWFilter
+
+  init(filter: CIRAWFilter) {
+    self.filter = filter
+  }
+
+  var supportedDecoderVersions: [String] {
+    filter.supportedDecoderVersions.map(\.rawValue)
+  }
+
+  var decoderVersion: String { filter.decoderVersion.rawValue }
+  var outputImage: CIImage? { filter.outputImage }
+  var properties: [AnyHashable: Any] { filter.properties }
+
+  func selectDecoderVersion(_ version: String) -> Bool {
+    guard
+      let selected = filter.supportedDecoderVersions.first(where: {
+        $0.rawValue == version
+      })
+    else {
+      return false
+    }
+    filter.decoderVersion = selected
+    return true
+  }
+}
+
+private struct SystemAppleRAWFilterProvider: AppleRAWFilterProviding {
+  func makeFilter(imageURL: URL) -> (any AppleRAWFilterAccess)? {
+    CIRAWFilter(imageURL: imageURL).map(SystemAppleRAWFilter.init)
+  }
+}
+
 public actor AppleRawDecoder: RawDecoder {
   struct DecodedImage {
     let image: CIImage
@@ -25,8 +72,13 @@ public actor AppleRawDecoder: RawDecoder {
   let workingColorSpace: CGColorSpace
   let previewColorSpace: CGColorSpace
   let sRGBColorSpace: CGColorSpace
+  private let rawFilterProvider: any AppleRAWFilterProviding
 
   public init() throws {
+    try self.init(rawFilterProvider: SystemAppleRAWFilterProvider())
+  }
+
+  init(rawFilterProvider: any AppleRAWFilterProviding) throws {
     guard let device = MTLCreateSystemDefaultDevice() else {
       throw RenderCoreError.metalUnavailable
     }
@@ -52,6 +104,7 @@ public actor AppleRawDecoder: RawDecoder {
     self.workingColorSpace = extendedACEScg
     self.previewColorSpace = previewColorSpace
     self.sRGBColorSpace = sRGBColorSpace
+    self.rawFilterProvider = rawFilterProvider
     self.context = CIContext(
       mtlDevice: device,
       options: [
@@ -113,10 +166,9 @@ public actor AppleRawDecoder: RawDecoder {
     try Task.checkCancellation()
     let versions: [String]
     if let sourceURL = request.sourceURL,
-      isRAWSource(at: sourceURL),
-      let raw = CIRAWFilter(imageURL: sourceURL)
+      let raw = rawFilterProvider.makeFilter(imageURL: sourceURL)
     {
-      versions = raw.supportedDecoderVersions.map(\.rawValue)
+      versions = raw.supportedDecoderVersions
     } else {
       versions = []
     }
@@ -176,7 +228,8 @@ public actor AppleRawDecoder: RawDecoder {
   func exportJPEG(
     _ request: ExportRequest,
     publisher: any AtomicFilePublishing,
-    publicationGate: any ExportPublicationGating
+    publicationGate: any ExportPublicationGating,
+    temporaryFileRemover: any TemporaryFileRemoving
   ) async throws -> ExportResult {
     try Task.checkCancellation()
     guard case .jpeg = request.format else {
@@ -215,8 +268,40 @@ public actor AppleRawDecoder: RawDecoder {
     let temporaryURL = destinationDirectory.appendingPathComponent(
       ".\(request.destinationURL.lastPathComponent).photosuite-tmp-\(UUID().uuidString)"
     )
-    defer { try? FileManager.default.removeItem(at: temporaryURL) }
+    let result: ExportResult
+    do {
+      result = try await encodeAndPublishJPEG(
+        opaqueImage,
+        request: request,
+        quality: quality,
+        temporaryURL: temporaryURL,
+        publisher: publisher,
+        publicationGate: publicationGate
+      )
+    } catch let primaryError {
+      try removeTemporaryFileIfPresent(
+        at: temporaryURL,
+        remover: temporaryFileRemover,
+        primaryError: primaryError
+      )
+      throw primaryError
+    }
+    try removeTemporaryFileIfPresent(
+      at: temporaryURL,
+      remover: temporaryFileRemover,
+      primaryError: nil
+    )
+    return result
+  }
 
+  private func encodeAndPublishJPEG(
+    _ opaqueImage: CIImage,
+    request: ExportRequest,
+    quality: Double,
+    temporaryURL: URL,
+    publisher: any AtomicFilePublishing,
+    publicationGate: any ExportPublicationGating
+  ) async throws -> ExportResult {
     try Task.checkCancellation()
     do {
       try context.writeJPEGRepresentation(
@@ -279,6 +364,23 @@ public actor AppleRawDecoder: RawDecoder {
     )
   }
 
+  private func removeTemporaryFileIfPresent(
+    at temporaryURL: URL,
+    remover: any TemporaryFileRemoving,
+    primaryError: (any Error)?
+  ) throws {
+    guard FileManager.default.fileExists(atPath: temporaryURL.path) else { return }
+    do {
+      try remover.removeItem(at: temporaryURL)
+    } catch let cleanupError {
+      throw RenderCoreError.cleanupFailed(
+        operation: "export.temporary.remove",
+        primaryError: primaryError.map { String(describing: $0) } ?? "No primary export error.",
+        cleanupError: String(describing: cleanupError)
+      )
+    }
+  }
+
   private func compiledImage(sourceURL: URL, recipe: EditRecipe) throws -> CIImage {
     try Task.checkCancellation()
     let decoderVersion =
@@ -319,19 +421,11 @@ public actor AppleRawDecoder: RawDecoder {
       throw RenderCoreError.unreadableSource(sourceURL)
     }
 
-    if isRAWSource(at: sourceURL) {
-      guard let raw = CIRAWFilter(imageURL: sourceURL) else {
-        throw RenderCoreError.unsupportedSource(sourceURL)
-      }
+    if let raw = rawFilterProvider.makeFilter(imageURL: sourceURL) {
       if let decoderVersion {
-        guard
-          let supportedVersion = raw.supportedDecoderVersions.first(where: {
-            $0.rawValue == decoderVersion
-          })
-        else {
+        guard raw.selectDecoderVersion(decoderVersion) else {
           throw RenderCoreError.unsupportedDecoderVersion(decoderVersion)
         }
-        raw.decoderVersion = supportedVersion
       }
       guard let image = raw.outputImage else {
         throw RenderCoreError.corruptSource(sourceURL)
@@ -340,7 +434,7 @@ public actor AppleRawDecoder: RawDecoder {
         image: try normalized(image, sourceURL: sourceURL),
         metadata: stringMetadata(from: raw.properties),
         decoderIdentifier: "com.apple.ciraw",
-        decoderVersion: raw.decoderVersion.rawValue
+        decoderVersion: raw.decoderVersion
       )
     }
 
@@ -392,17 +486,6 @@ public actor AppleRawDecoder: RawDecoder {
         break
       }
     }
-  }
-
-  private func isRAWSource(at sourceURL: URL) -> Bool {
-    if let source = CGImageSourceCreateWithURL(sourceURL as CFURL, nil),
-      let detectedType = CGImageSourceGetType(source),
-      UTType(detectedType as String)?.conforms(to: .rawImage) == true
-    {
-      return true
-    }
-    return (try? sourceURL.resourceValues(forKeys: [.contentTypeKey]).contentType)?
-      .conforms(to: .rawImage) == true
   }
 
   private func isRecognizedImageContainer(at sourceURL: URL) -> Bool {

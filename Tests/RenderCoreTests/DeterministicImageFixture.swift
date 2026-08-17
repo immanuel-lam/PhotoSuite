@@ -8,7 +8,13 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
+@testable import RenderCore
+
 enum DeterministicImageFixture {
+  static func makeCommonImageDecoder() throws -> AppleRawDecoder {
+    try AppleRawDecoder(rawFilterProvider: NoAppleRAWFilterProvider())
+  }
+
   static func makeDirectory() throws -> URL {
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("PhotoSuite-RenderCoreTests-\(UUID().uuidString)", isDirectory: true)
@@ -178,5 +184,11 @@ enum DeterministicImageFixture {
     case imageCreationFailed
     case destinationCreationFailed
     case encodingFailed
+  }
+}
+
+private struct NoAppleRAWFilterProvider: AppleRAWFilterProviding {
+  func makeFilter(imageURL: URL) -> (any AppleRAWFilterAccess)? {
+    nil
   }
 }

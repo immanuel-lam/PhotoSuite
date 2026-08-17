@@ -24,5 +24,6 @@ public enum RenderCoreError: Error, Equatable, Sendable {
   case sourceDestinationConflict(URL)
   case jpegEncodingFailed(URL)
   case atomicWriteFailed(URL)
+  case cleanupFailed(operation: String, primaryError: String, cleanupError: String)
   case renderFailed
 }
