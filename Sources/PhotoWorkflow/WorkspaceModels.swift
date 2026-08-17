@@ -93,6 +93,9 @@ public enum DevelopAdjustmentFamily: String, CaseIterable, Identifiable, Sendabl
   case calibration
   case blackAndWhite
   case hdr
+  case clone
+  case healing
+  case redEye
 
   public var id: Self { self }
 }

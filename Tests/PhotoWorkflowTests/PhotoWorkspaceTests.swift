@@ -350,6 +350,108 @@ final class PhotoWorkspaceTests: XCTestCase {
     XCTAssertEqual(reopened.currentRecipe?.operations, expected)
   }
 
+  func testRetouchDevelopOperationsCommitInCanonicalOrderAndSurviveReopen() async throws {
+    let asset = makeAsset(name: "retouch-families.jpg")
+    let initial = makeRecipe(assetID: asset.id)
+    let catalog = CatalogSpy(assets: [asset], recipes: [asset.id: initial])
+    let workspace = makeWorkspace(catalog: catalog)
+    let source = try XCTUnwrap(RetouchPointV1(x: 0.2, y: 0.35))
+    let target = try XCTUnwrap(RetouchPointV1(x: 0.72, y: 0.65))
+    let sample = try XCTUnwrap(RetouchBrushSampleV1(point: target, pressure: 1))
+    let brush = try XCTUnwrap(
+      RetouchBrushV1(samples: [sample], radius: 0.16, feather: 0.3, flow: 0.9)
+    )
+    let clone = try XCTUnwrap(
+      CloneAdjustmentV1(sourceAnchor: source, targetAnchor: target, brush: brush)
+    )
+    let healing = try XCTUnwrap(
+      HealingAdjustmentV1(
+        sourceAnchor: source,
+        targetAnchor: target,
+        brush: brush,
+        blend: 1
+      )
+    )
+    let redEye = try XCTUnwrap(
+      RedEyeAdjustmentV1(center: target, radius: 0.12, feather: 0.4)
+    )
+    let expected: [EditOperation] = [.clone(clone), .healing(healing), .redEye(redEye)]
+
+    await workspace.reopen()
+    for operation in expected.reversed() {
+      await workspace.commitDevelopOperation(operation)
+    }
+
+    XCTAssertEqual(workspace.currentRecipe?.revision, 3)
+    XCTAssertEqual(workspace.currentRecipe?.operations, expected)
+    XCTAssertEqual(workspace.currentDevelopOperations, expected)
+
+    let reopened = makeWorkspace(catalog: catalog)
+    await reopened.reopen()
+    XCTAssertEqual(reopened.currentRecipe?.revision, 3)
+    XCTAssertEqual(reopened.currentRecipe?.operations, expected)
+    XCTAssertEqual(reopened.currentDevelopOperations, expected)
+  }
+
+  func testClearingRetouchDevelopFamilyRemovesOnlySelectedOperationAndPersists() async throws {
+    let asset = makeAsset(name: "retouch-clear.jpg")
+    let source = try XCTUnwrap(RetouchPointV1(x: 0.1, y: 0.2))
+    let target = try XCTUnwrap(RetouchPointV1(x: 0.8, y: 0.7))
+    let sample = try XCTUnwrap(RetouchBrushSampleV1(point: target, pressure: 1))
+    let brush = try XCTUnwrap(
+      RetouchBrushV1(samples: [sample], radius: 0.14, feather: 0.2, flow: 0.85)
+    )
+    let clone = try XCTUnwrap(
+      CloneAdjustmentV1(sourceAnchor: source, targetAnchor: target, brush: brush)
+    )
+    let healing = try XCTUnwrap(
+      HealingAdjustmentV1(
+        sourceAnchor: source,
+        targetAnchor: target,
+        brush: brush,
+        blend: 1
+      )
+    )
+    let redEye = try XCTUnwrap(
+      RedEyeAdjustmentV1(center: target, radius: 0.1, feather: 0.25)
+    )
+    let initial = makeRecipe(
+      assetID: asset.id,
+      operations: [
+        .exposureEV(0.5),
+        .clone(clone),
+        .healing(healing),
+        .redEye(redEye),
+      ]
+    )
+    let catalog = CatalogSpy(assets: [asset], recipes: [asset.id: initial])
+    let workspace = makeWorkspace(catalog: catalog)
+    await workspace.reopen()
+
+    await workspace.clearDevelopOperation(.healing)
+    let afterHealing: [EditOperation] = [.exposureEV(0.5), .clone(clone), .redEye(redEye)]
+    XCTAssertEqual(workspace.currentRecipe?.operations, afterHealing)
+    XCTAssertEqual(workspace.currentRecipe?.revision, 1)
+
+    let reopened = makeWorkspace(catalog: catalog)
+    await reopened.reopen()
+    XCTAssertEqual(reopened.currentRecipe?.operations, afterHealing)
+
+    await reopened.clearDevelopOperation(.clone)
+    XCTAssertEqual(
+      reopened.currentRecipe?.operations,
+      [.exposureEV(0.5), .redEye(redEye)] as [EditOperation]
+    )
+    XCTAssertEqual(reopened.currentRecipe?.revision, 2)
+
+    await reopened.clearDevelopOperation(.redEye)
+    XCTAssertEqual(
+      reopened.currentRecipe?.operations,
+      [.exposureEV(0.5)] as [EditOperation]
+    )
+    XCTAssertEqual(reopened.currentRecipe?.revision, 3)
+  }
+
   func testMaskAuthoringPersistsVersionedGraphAndSupportsInvertAndRemove() async throws {
     let asset = makeAsset(name: "mask.jpg")
     let initial = makeRecipe(assetID: asset.id)

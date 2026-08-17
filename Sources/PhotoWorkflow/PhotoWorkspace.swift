@@ -2341,6 +2341,9 @@ public final class PhotoWorkspace {
     case .calibration: .calibration
     case .blackAndWhite: .blackAndWhite
     case .hdr: .hdr
+    case .clone: .clone
+    case .healing: .healing
+    case .redEye: .redEye
     default: nil
     }
   }
