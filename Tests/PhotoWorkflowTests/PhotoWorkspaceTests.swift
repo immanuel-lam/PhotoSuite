@@ -236,6 +236,28 @@ final class PhotoWorkspaceTests: XCTestCase {
     XCTAssertEqual(revisions, [1, 2, 3, 4, 5, 6, 7])
   }
 
+  func testCommittingColorGradeCreatesOneOrderedRecipeRevision() async throws {
+    let asset = makeAsset(name: "grade.jpg")
+    let initial = makeRecipe(
+      assetID: asset.id,
+      operations: [.exposureEV(0.5), .rotationDegrees(90)]
+    )
+    let catalog = CatalogSpy(assets: [asset], recipes: [asset.id: initial])
+    let workspace = makeWorkspace(catalog: catalog)
+    let grade = try makeColorGrade()
+    await workspace.reopen()
+
+    await workspace.commitColorGrade(grade)
+
+    XCTAssertEqual(workspace.currentRecipe?.revision, 1)
+    XCTAssertEqual(
+      workspace.currentRecipe?.operations,
+      [.exposureEV(0.5), .threeWayColorGrade(grade), .rotationDegrees(90)]
+    )
+    let savedRevisions = await catalog.savedRecipes().map(\.revision)
+    XCTAssertEqual(savedRevisions, [1])
+  }
+
   func testNewPreviewCancelsAndSuppressesStalePreview() async throws {
     let asset = makeAsset(name: "preview.jpg")
     let initial = makeRecipe(assetID: asset.id)
@@ -245,20 +267,68 @@ final class PhotoWorkspaceTests: XCTestCase {
 
     let reopen = Task { await workspace.reopen() }
     await renderer.waitForRequestCount(1)
-    await renderer.completeRequest(0, bytes: Data("initial".utf8))
+    await renderer.completeRequest(
+      0,
+      bytes: Data("initial".utf8),
+      histogram: histogram(total: 1)
+    )
     await reopen.value
 
     let first = Task { await workspace.refreshPreview() }
     await renderer.waitForRequestCount(2)
     let second = Task { await workspace.refreshPreview() }
     await renderer.waitForRequestCount(3)
-    await renderer.completeRequest(2, bytes: Data("new".utf8))
-    await renderer.completeRequest(1, bytes: Data("stale".utf8))
+    await renderer.completeRequest(
+      2,
+      bytes: Data("new".utf8),
+      histogram: histogram(total: 3)
+    )
+    await renderer.completeRequest(
+      1,
+      bytes: Data("stale".utf8),
+      histogram: histogram(total: 2)
+    )
     await first.value
     await second.value
 
     XCTAssertEqual(workspace.preview?.imageData, Data("new".utf8))
+    XCTAssertEqual(workspace.preview?.histogram?.red.reduce(0, +), 3)
     XCTAssertNil(workspace.errorMessage)
+  }
+
+  func testSelectingAnUncachedAssetClearsPreviousHistogramUntilItsPreviewArrives() async throws {
+    let first = makeAsset(name: "first.jpg")
+    let second = makeAsset(name: "second.jpg")
+    let firstRecipe = makeRecipe(assetID: first.id)
+    let secondRecipe = makeRecipe(assetID: second.id)
+    let catalog = CatalogSpy(
+      assets: [first, second],
+      recipes: [first.id: firstRecipe, second.id: secondRecipe]
+    )
+    let renderer = ControllableRenderer()
+    let workspace = makeWorkspace(catalog: catalog, renderer: renderer)
+
+    let reopen = Task { await workspace.reopen() }
+    await renderer.waitForRequestCount(1)
+    await renderer.completeRequest(
+      0,
+      bytes: Data("first".utf8),
+      histogram: histogram(total: 1)
+    )
+    await reopen.value
+    XCTAssertEqual(workspace.preview?.histogram?.red.reduce(0, +), 1)
+
+    let select = Task { await workspace.selectAsset(second.id) }
+    await renderer.waitForRequestCount(2)
+    XCTAssertNil(workspace.preview)
+    await renderer.completeRequest(
+      1,
+      bytes: Data("second".utf8),
+      histogram: histogram(total: 2)
+    )
+    await select.value
+
+    XCTAssertEqual(workspace.preview?.histogram?.red.reduce(0, +), 2)
   }
 
   func testExportUsesSelectedAssetAndLatestDurableRecipe() async throws {
@@ -516,6 +586,31 @@ extension PhotoWorkspaceTests {
       operations: operations
     )
   }
+
+  private func makeColorGrade() throws -> ThreeWayColorGrade {
+    try XCTUnwrap(
+      ThreeWayColorGrade(
+        shadows: try XCTUnwrap(
+          ThreeWayColorGrade.Tone(hueDegrees: 220, chroma: 0.35, luminance: -0.1)
+        ),
+        midtones: try XCTUnwrap(
+          ThreeWayColorGrade.Tone(hueDegrees: 35, chroma: 0.2, luminance: 0.05)
+        ),
+        highlights: try XCTUnwrap(
+          ThreeWayColorGrade.Tone(hueDegrees: 55, chroma: 0.15, luminance: 0.1)
+        )
+      )
+    )
+  }
+
+  private func histogram(total: UInt64) -> RenderHistogram {
+    RenderHistogram(
+      red: [UInt64](repeating: 0, count: 255) + [total],
+      green: [UInt64](repeating: 0, count: 255) + [total],
+      blue: [UInt64](repeating: 0, count: 255) + [total],
+      luminance: [UInt64](repeating: 0, count: 255) + [total]
+    )!
+  }
 }
 
 private actor CatalogSpy: CatalogStore {
@@ -720,12 +815,13 @@ private actor ControllableRenderer: RenderEngine {
     while continuations.count < count { await Task.yield() }
   }
 
-  func completeRequest(_ index: Int, bytes: Data) {
+  func completeRequest(_ index: Int, bytes: Data, histogram: RenderHistogram? = nil) {
     continuations[index].resume(
       returning: RenderResult(
         imageData: bytes,
         typeIdentifier: "public.png",
-        pixelDimensions: PixelDimensions(width: 20, height: 10)!
+        pixelDimensions: PixelDimensions(width: 20, height: 10)!,
+        histogram: histogram
       )
     )
   }

@@ -275,6 +275,12 @@ public final class PhotoWorkspace {
     }
   }
 
+  public func commitColorGrade(_ grade: ThreeWayColorGrade) async {
+    await enqueueEditMutation { [weak self] in
+      await self?.performCommitColorGrade(grade)
+    }
+  }
+
   public func rotateClockwise() async {
     await enqueueEditMutation { [weak self] in await self?.performRotateClockwise() }
   }
@@ -303,6 +309,25 @@ public final class PhotoWorkspace {
     guard let recipe = editableRecipe(operation: "edit") else { return }
     var operations = recipe.operations.filter { !matches($0, kind: kind) }
     if value != 0 { operations.append(operation(kind, value: value)) }
+    operations = canonicalized(operations)
+    guard operations != recipe.operations else { return }
+    let oldUndo = undoStack
+    let oldRedo = redoStack
+    undoStack.append(recipe.operations)
+    redoStack.removeAll()
+    if !(await saveOperations(operations)) {
+      undoStack = oldUndo
+      redoStack = oldRedo
+    }
+  }
+
+  private func performCommitColorGrade(_ grade: ThreeWayColorGrade) async {
+    guard let recipe = editableRecipe(operation: "colour grade") else { return }
+    var operations = recipe.operations.filter {
+      if case .threeWayColorGrade = $0 { return false }
+      return true
+    }
+    if !grade.isNeutral { operations.append(.threeWayColorGrade(grade)) }
     operations = canonicalized(operations)
     guard operations != recipe.operations else { return }
     let oldUndo = undoStack
