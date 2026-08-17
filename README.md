@@ -46,9 +46,9 @@ contains these tested components:
 The interface can review local import selections with duplicate states, browse a
 catalog, relink a missing source after fingerprint validation, apply basic and
 baseline Develop groups, author local mask graphs, crop and rotate, compare before
-and after, inspect
-the histogram and three-way colour grade, author versioned masks, edit
-catalog metadata, and write JPEG, PNG, HEIF, or TIFF output through Deliver.
+and after, inspect the histogram and three-way colour grade, author versioned masks,
+edit catalog metadata, import and write the supported XMP sidecar fields, and write
+JPEG, PNG, HEIF, or TIFF output through Deliver.
 Durable regular and smart collections plus photo stacks load from the catalog and
 can be created from the Library sidebar. Durable hierarchical keyword nodes and
 asset assignments, folder hierarchy and asset assignments, durable Develop presets,
@@ -83,8 +83,9 @@ metadata batch editing, complete keyword-taxonomy authoring, identity recognitio
 and full virtual-copy batch/export workflow support are also incomplete. The native
 People inspector can review durable Vision geometry and save or clear optional
 user-authored labels; it does not infer biometric identity. An atomic XMP
-sidecar writer/reader and a bounded standards-based Adobe XMP Develop-preset
-importer exist as tested interoperability cores, but proprietary Lightroom
+sidecar writer/reader with native metadata-inspector actions and a bounded
+standards-based Adobe XMP Develop-preset importer exist as tested interoperability
+cores, but embedded XMP writing and proprietary Lightroom
 catalog parsing is not implemented. Cloud services, mobile clients, and web editing are out
 of scope. There is no signed, notarized,
 reproducible, or published application release. Do not use this pre-alpha

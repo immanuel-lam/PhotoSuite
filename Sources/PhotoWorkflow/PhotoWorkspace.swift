@@ -57,6 +57,7 @@ public final class PhotoWorkspace {
   public var isLoadingPhotoLocations = false
   public var isProfessionalExporting = false
   public var lastProfessionalOutput: URL?
+  public var metadataSidecarStatus: MetadataSidecarStatus = .idle
 
   public var selectedAsset: PhotoAsset? {
     guard let selectedAssetID else { return nil }
@@ -224,6 +225,7 @@ public final class PhotoWorkspace {
       virtualCopies = []
       selectedVirtualCopyID = nil
       developPresets = []
+      metadataSidecarStatus = .idle
 
       if let libraryCatalog = catalog as? any LibraryCatalogStore {
         do {
@@ -1229,6 +1231,23 @@ public final class PhotoWorkspace {
     }
   }
 
+  /// Imports the supported PhotoMetadata fields from an XMP sidecar into the catalog.
+  /// The sidecar is read inside its security-scoped access interval. The source photograph is
+  /// never opened or mutated, and its fingerprint remains unchanged.
+  public func importSelectedMetadataSidecar(from sidecarURL: URL) async {
+    await enqueueLibraryMutation { [weak self] in
+      await self?.performImportSelectedMetadataSidecar(from: sidecarURL)
+    }
+  }
+
+  /// Writes the selected photograph's durable metadata to its adjacent XMP sidecar. The source
+  /// remains immutable and the result is published atomically by the sidecar writer.
+  public func exportSelectedMetadataSidecar() async {
+    await enqueueLibraryMutation { [weak self] in
+      await self?.performExportSelectedMetadataSidecar()
+    }
+  }
+
   @discardableResult
   public func createCollection(named name: String) -> LibraryCollection {
     let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2006,6 +2025,73 @@ public final class PhotoWorkspace {
       errorMessage = nil
     } catch {
       record(error, operation: "library.metadata")
+    }
+  }
+
+  private func performImportSelectedMetadataSidecar(from sidecarURL: URL) async {
+    guard selectedAsset != nil else {
+      let error = MetadataSidecarError.noSelection
+      metadataSidecarStatus = .failed(error)
+      errorMessage = error.localizedDescription
+      return
+    }
+    guard catalog is any MetadataCatalogStore else {
+      let error = MetadataSidecarError.metadataStoreUnavailable
+      metadataSidecarStatus = .failed(error)
+      errorMessage = error.localizedDescription
+      return
+    }
+
+    metadataSidecarStatus = .importing(sidecarURL)
+    do {
+      let result = try await MetadataSidecarService(sourceAccess: sourceAccess).`import`(
+        from: sidecarURL
+      )
+      lastError = nil
+      errorMessage = nil
+      await performUpdateSelectedMetadata(result.metadata)
+      if let error = lastError {
+        let sidecarError = MetadataSidecarError.catalogUpdateFailed(error.localizedDescription)
+        metadataSidecarStatus = .failed(sidecarError)
+        errorMessage = sidecarError.localizedDescription
+      } else {
+        metadataSidecarStatus = .imported(result)
+      }
+    } catch let error as MetadataSidecarError {
+      metadataSidecarStatus = .failed(error)
+      errorMessage = error.localizedDescription
+    } catch {
+      let sidecarError = MetadataSidecarError.catalogUpdateFailed(error.localizedDescription)
+      metadataSidecarStatus = .failed(sidecarError)
+      errorMessage = sidecarError.localizedDescription
+    }
+  }
+
+  private func performExportSelectedMetadataSidecar() async {
+    guard let asset = selectedAsset else {
+      let error = MetadataSidecarError.noSelection
+      metadataSidecarStatus = .failed(error)
+      errorMessage = error.localizedDescription
+      return
+    }
+
+    metadataSidecarStatus = .exporting
+    do {
+      let sourceURL = try await sourceAccess.resolve(asset)
+      let result = try await MetadataSidecarService(sourceAccess: sourceAccess).export(
+        metadata: asset.metadata,
+        for: sourceURL
+      )
+      metadataSidecarStatus = .exported(result)
+      lastError = nil
+      errorMessage = nil
+    } catch let error as MetadataSidecarError {
+      metadataSidecarStatus = .failed(error)
+      errorMessage = error.localizedDescription
+    } catch {
+      let sidecarError = MetadataSidecarError.sourceScopeUnavailable(asset.sourceURL)
+      metadataSidecarStatus = .failed(sidecarError)
+      errorMessage = sidecarError.localizedDescription
     }
   }
 

@@ -774,6 +774,65 @@ final class PhotoWorkspaceTests: XCTestCase {
     XCTAssertEqual(stored.fingerprint, originalFingerprint)
   }
 
+  func testWorkspaceExportsSelectedMetadataToSidecarWithoutChangingSource() async throws {
+    let name = "metadata-sidecar-export-\(UUID().uuidString).jpg"
+    let sourceURL = URL(fileURLWithPath: "/tmp/\(name)")
+    let sourceData = Data("source bytes remain immutable".utf8)
+    try sourceData.write(to: sourceURL)
+    defer {
+      try? FileManager.default.removeItem(at: sourceURL)
+      try? FileManager.default.removeItem(at: XMPMetadataSidecar.sidecarURL(for: sourceURL))
+    }
+    let asset = makeAsset(name: name)
+    let catalog = CatalogSpy(assets: [asset], recipes: [asset.id: makeRecipe(assetID: asset.id)])
+    let workspace = makeWorkspace(catalog: catalog)
+    await workspace.reopen()
+    let metadata = try XCTUnwrap(PhotoMetadata(title: "Exported", keywords: ["Sydney"]))
+    await workspace.updateSelectedMetadata(metadata)
+
+    await workspace.exportSelectedMetadataSidecar()
+
+    guard case .exported(let result) = workspace.metadataSidecarStatus else {
+      XCTFail("Expected the selected metadata to export to an XMP sidecar.")
+      return
+    }
+    XCTAssertEqual(result.sourceURL, sourceURL)
+    XCTAssertEqual(try XMPMetadataSidecar.read(from: result.sidecarURL), metadata)
+    XCTAssertEqual(try Data(contentsOf: sourceURL), sourceData)
+    XCTAssertEqual(workspace.selectedAsset?.fingerprint, asset.fingerprint)
+    XCTAssertNil(workspace.lastError)
+  }
+
+  func testWorkspaceImportsSidecarIntoCatalogWithoutChangingSourceIdentity() async throws {
+    let name = "metadata-sidecar-import-\(UUID().uuidString).jpg"
+    let sourceURL = URL(fileURLWithPath: "/tmp/\(name)")
+    let sourceData = Data("source bytes remain immutable".utf8)
+    try sourceData.write(to: sourceURL)
+    defer {
+      try? FileManager.default.removeItem(at: sourceURL)
+      try? FileManager.default.removeItem(at: XMPMetadataSidecar.sidecarURL(for: sourceURL))
+    }
+    let asset = makeAsset(name: name)
+    let catalog = CatalogSpy(assets: [asset], recipes: [asset.id: makeRecipe(assetID: asset.id)])
+    let workspace = makeWorkspace(catalog: catalog)
+    await workspace.reopen()
+    let metadata = try XCTUnwrap(
+      PhotoMetadata(title: "Imported", creator: "Photographer", keywords: ["one", "two"]))
+    let sidecarURL = try XMPMetadataSidecar.write(metadata, for: sourceURL)
+
+    await workspace.importSelectedMetadataSidecar(from: sidecarURL)
+
+    guard case .imported(let result) = workspace.metadataSidecarStatus else {
+      XCTFail("Expected metadata to import from the selected XMP sidecar.")
+      return
+    }
+    XCTAssertEqual(result.sidecarURL, sidecarURL)
+    XCTAssertEqual(workspace.selectedAsset?.metadata, metadata)
+    XCTAssertEqual(workspace.selectedAsset?.fingerprint, asset.fingerprint)
+    XCTAssertEqual(try Data(contentsOf: sourceURL), sourceData)
+    XCTAssertNil(workspace.lastError)
+  }
+
   func testCollectionsStacksAndSmartFiltersComposeWithoutChangingAssets() async throws {
     let green = makeAsset(name: "green.jpg", rating: 4, colorLabel: .green)
     let red = makeAsset(name: "red.jpg", rating: 2, colorLabel: .red)

@@ -65,6 +65,16 @@ struct MetadataEditorView: View {
           .disabled(isSaving)
           .accessibilityIdentifier("metadata-save-button")
         }
+
+        MetadataSidecarActionsView(
+          status: workspace.metadataSidecarStatus,
+          onExport: {
+            Task { await workspace.exportSelectedMetadataSidecar() }
+          },
+          onImport: { url in
+            Task { await workspace.importSelectedMetadataSidecar(from: url) }
+          }
+        )
       }
       .padding(.top, 8)
     } label: {
