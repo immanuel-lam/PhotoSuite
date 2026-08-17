@@ -551,6 +551,56 @@ public final class PhotoWorkspace {
     }
   }
 
+  /// Scans a selected folder and atomically relinks each missing asset whose source
+  /// fingerprint is found. The catalog commits each successful asset independently;
+  /// unmatched and failed assets remain missing and are returned in the typed result.
+  @discardableResult
+  public func relinkMissingSources(in folderURL: URL) async throws -> BatchRelinkResult {
+    let missingAssets = assets.filter(\.isMissing)
+    let catalog = self.catalog
+    isRelinking = true
+    defer { isRelinking = false }
+
+    let service = BatchMissingSourceRelinkService(
+      sourceAccess: sourceAccess,
+      fingerprint: fingerprint,
+      relink: { asset, replacementURL, replacementFingerprint in
+        let result = try await catalog.relinkAsset(
+          CatalogRelinkAssetRequest(
+            assetID: asset.id,
+            sourceURL: replacementURL,
+            filename: replacementURL.lastPathComponent,
+            typeIdentifier: asset.typeIdentifier,
+            fingerprint: replacementFingerprint
+          )
+        )
+        return result.asset
+      }
+    )
+
+    do {
+      let result = try await service.relink(assets: missingAssets, in: folderURL)
+      for match in result.matched {
+        if let index = assets.firstIndex(where: { $0.id == match.assetID }) {
+          assets[index] = match.relinkedAsset
+        }
+        previewCache.removeValue(forKey: match.assetID)
+      }
+      if let selectedAssetID, result.matched.contains(where: { $0.assetID == selectedAssetID }) {
+        preview = nil
+        if currentRecipe != nil {
+          await refreshPreview()
+        }
+      }
+      lastError = nil
+      errorMessage = nil
+      return result
+    } catch {
+      errorMessage = message(for: error)
+      throw error
+    }
+  }
+
   public func selectAsset(_ assetID: UUID) async {
     guard let asset = assets.first(where: { $0.id == assetID }) else {
       record(PhotoWorkspaceError.invalidSelection(assetID), operation: "select")

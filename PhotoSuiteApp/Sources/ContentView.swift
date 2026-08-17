@@ -15,6 +15,7 @@ struct ContentView: View {
   @State private var inspectorPresented = false
   @State private var importReview: LibraryImportReview?
   @State private var missingSourceAsset: PhotoAsset?
+  @State private var batchRelinkPresented = false
   private let sidebarWidth: CGFloat = 300
 
   var body: some View {
@@ -37,10 +38,13 @@ struct ContentView: View {
       }
     }
     .overlay(alignment: .topTrailing) {
-      WorkspaceCommandBar(workspace: workspace)
-        .padding(.top, 14)
-        .padding(.trailing, 16)
-        .zIndex(3)
+      WorkspaceCommandBar(
+        workspace: workspace,
+        onBatchRelink: { batchRelinkPresented = true }
+      )
+      .padding(.top, 14)
+      .padding(.trailing, 16)
+      .zIndex(3)
     }
     .inspector(isPresented: $inspectorPresented) {
       DevelopInspector(workspace: workspace)
@@ -79,6 +83,14 @@ struct ContentView: View {
         asset: asset,
         onRelink: { replacementURL in
           _ = try await workspace.relinkAsset(assetID: asset.id, to: replacementURL)
+        }
+      )
+    }
+    .sheet(isPresented: $batchRelinkPresented) {
+      BatchMissingSourceRelinkView(
+        missingAssetCount: workspace.assets.filter(\.isMissing).count,
+        onRelink: { folderURL in
+          try await workspace.relinkMissingSources(in: folderURL)
         }
       )
     }
@@ -197,6 +209,15 @@ extension DeliverFormat {
 @MainActor
 private struct WorkspaceCommandBar: View {
   @Bindable var workspace: PhotoWorkspace
+  let onBatchRelink: @MainActor () -> Void
+
+  init(
+    workspace: PhotoWorkspace,
+    onBatchRelink: @escaping @MainActor () -> Void = {}
+  ) {
+    self.workspace = workspace
+    self.onBatchRelink = onBatchRelink
+  }
 
   var body: some View {
     HStack(spacing: 10) {
@@ -240,6 +261,18 @@ private struct WorkspaceCommandBar: View {
           .help("Import common images or Apple-supported RAW photographs")
           .accessibilityIdentifier(ModernUIAccessibility.importButton)
           .modifier(GlassButtonWhenAvailable())
+
+          if workspace.assets.contains(where: \.isMissing) {
+            Button {
+              onBatchRelink()
+            } label: {
+              Label("Relink Missing Sources", systemImage: "arrow.triangle.2.circlepath")
+            }
+            .labelStyle(.iconOnly)
+            .help("Relink missing sources from a folder")
+            .accessibilityIdentifier(ModernUIAccessibility.batchMissingSourceRelinkToolbar)
+            .modifier(GlassButtonWhenAvailable())
+          }
 
           Toggle(isOn: $workspace.proofMode) {
             Label("Proof Mode", systemImage: "rectangle.inset.filled")
