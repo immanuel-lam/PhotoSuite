@@ -8,6 +8,7 @@ public enum MaskKind: Codable, Hashable, Sendable {
   case radialGradient
   case luminanceRange
   case colorRange
+  case depthRange
   case subject
   case sky
   case background
@@ -42,6 +43,7 @@ public enum MaskKind: Codable, Hashable, Sendable {
     "radialGradient",
     "luminanceRange",
     "colorRange",
+    "depthRange",
     "subject",
     "sky",
     "background",
@@ -55,6 +57,7 @@ public enum MaskKind: Codable, Hashable, Sendable {
     case "radialGradient": self = .radialGradient
     case "luminanceRange": self = .luminanceRange
     case "colorRange": self = .colorRange
+    case "depthRange": self = .depthRange
     case "subject": self = .subject
     case "sky": self = .sky
     case "background": self = .background
@@ -70,6 +73,7 @@ public enum MaskKind: Codable, Hashable, Sendable {
     case .radialGradient: "radialGradient"
     case .luminanceRange: "luminanceRange"
     case .colorRange: "colorRange"
+    case .depthRange: "depthRange"
     case .subject: "subject"
     case .sky: "sky"
     case .background: "background"
