@@ -996,7 +996,8 @@ public final class PhotoWorkspace {
         pixelDimensions: asset.pixelDimensions,
         rating: rating ?? asset.rating,
         colorLabel: colorLabel ?? asset.colorLabel,
-        isMissing: asset.isMissing
+        isMissing: asset.isMissing,
+        metadata: asset.metadata
       )
     else {
       record(PhotoWorkspaceError.invalidRating(rating ?? asset.rating), operation: "rating")
@@ -1050,7 +1051,8 @@ public final class PhotoWorkspace {
         pixelDimensions: asset.pixelDimensions,
         rating: asset.rating,
         colorLabel: asset.colorLabel,
-        isMissing: true
+        isMissing: true,
+        metadata: asset.metadata
       ) ?? asset
     }
   }

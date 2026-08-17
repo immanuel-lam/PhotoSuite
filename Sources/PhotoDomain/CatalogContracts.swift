@@ -34,6 +34,86 @@ public struct CatalogAssetFetchResult: Codable, Hashable, Sendable {
   }
 }
 
+public struct CatalogAssetMetadataUpdateRequest: Codable, Hashable, Sendable {
+  public let assetID: UUID
+  public let metadata: PhotoMetadata
+
+  public init(assetID: UUID, metadata: PhotoMetadata) {
+    self.assetID = assetID
+    self.metadata = metadata
+  }
+}
+
+public struct CatalogAssetMetadataUpdateResult: Codable, Hashable, Sendable {
+  public let asset: PhotoAsset
+
+  public init(asset: PhotoAsset) {
+    self.asset = asset
+  }
+}
+
+public struct CatalogMetadataPresetSaveRequest: Codable, Hashable, Sendable {
+  public let preset: MetadataPreset
+
+  public init(preset: MetadataPreset) {
+    self.preset = preset
+  }
+}
+
+public struct CatalogMetadataPresetSaveResult: Codable, Hashable, Sendable {
+  public let preset: MetadataPreset
+
+  public init(preset: MetadataPreset) {
+    self.preset = preset
+  }
+}
+
+public struct CatalogMetadataPresetListRequest: Codable, Hashable, Sendable {
+  public init() {}
+}
+
+public struct CatalogMetadataPresetListResult: Codable, Hashable, Sendable {
+  public let presets: [MetadataPreset]
+
+  public init(presets: [MetadataPreset]) {
+    self.presets = presets
+  }
+}
+
+public struct CatalogMetadataPresetDeleteRequest: Codable, Hashable, Sendable {
+  public let presetID: UUID
+
+  public init(presetID: UUID) {
+    self.presetID = presetID
+  }
+}
+
+public struct CatalogMetadataPresetDeleteResult: Codable, Hashable, Sendable {
+  public let presetID: UUID
+
+  public init(presetID: UUID) {
+    self.presetID = presetID
+  }
+}
+
+public struct CatalogApplyMetadataPresetRequest: Codable, Hashable, Sendable {
+  public let assetID: UUID
+  public let presetID: UUID
+
+  public init(assetID: UUID, presetID: UUID) {
+    self.assetID = assetID
+    self.presetID = presetID
+  }
+}
+
+public struct CatalogApplyMetadataPresetResult: Codable, Hashable, Sendable {
+  public let asset: PhotoAsset
+
+  public init(asset: PhotoAsset) {
+    self.asset = asset
+  }
+}
+
 public enum CatalogAssetOrder: String, Codable, Hashable, Sendable {
   case importDateAscending
   case importDateDescending
@@ -207,6 +287,19 @@ public protocol CatalogStore: Sendable {
   func relinkAsset(_ request: CatalogRelinkAssetRequest) async throws -> CatalogRelinkAssetResult
   func checkIntegrity(_ request: CatalogIntegrityRequest) async throws -> CatalogIntegrityResult
   func backup(_ request: CatalogBackupRequest) async throws -> CatalogBackupResult
+}
+
+public protocol MetadataCatalogStore: CatalogStore {
+  func updateMetadata(_ request: CatalogAssetMetadataUpdateRequest) async throws
+    -> CatalogAssetMetadataUpdateResult
+  func saveMetadataPreset(_ request: CatalogMetadataPresetSaveRequest) async throws
+    -> CatalogMetadataPresetSaveResult
+  func listMetadataPresets(_ request: CatalogMetadataPresetListRequest) async throws
+    -> CatalogMetadataPresetListResult
+  func deleteMetadataPreset(_ request: CatalogMetadataPresetDeleteRequest) async throws
+    -> CatalogMetadataPresetDeleteResult
+  func applyMetadataPreset(_ request: CatalogApplyMetadataPresetRequest) async throws
+    -> CatalogApplyMetadataPresetResult
 }
 
 public struct JobEnqueueRequest: Codable, Hashable, Sendable {

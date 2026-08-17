@@ -21,7 +21,33 @@ final class CatalogCoreTests: XCTestCase {
     XCTAssertEqual(configuration.synchronous, 2)
     XCTAssertEqual(configuration.foreignKeys, 1)
     XCTAssertEqual(configuration.busyTimeout, 5_000)
-    XCTAssertEqual(try scalarInt(database, "PRAGMA user_version;"), 1)
+    XCTAssertEqual(try scalarInt(database, "PRAGMA user_version;"), 2)
+  }
+
+  func testExistingVersionOneCatalogMigratesMetadataTables() throws {
+    let catalogURL = try makeCatalogURL()
+    let database = try openWritableDatabase(catalogURL)
+    try execute(database, versionOneSchema + "\nPRAGMA user_version=1;")
+    XCTAssertEqual(sqlite3_close_v2(database), SQLITE_OK)
+
+    _ = try SQLiteCatalogStore(catalogURL: catalogURL, ftsAvailabilityOverride: false)
+    let migrated = try openDatabase(catalogURL)
+    defer { sqlite3_close_v2(migrated) }
+    XCTAssertEqual(try scalarInt(migrated, "PRAGMA user_version;"), 2)
+    XCTAssertEqual(
+      try scalarInt(
+        migrated,
+        "SELECT COUNT(*) FROM pragma_table_info('assets') WHERE name = 'metadata_json';"
+      ),
+      1
+    )
+    XCTAssertEqual(
+      try scalarInt(
+        migrated,
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'asset_keywords';"
+      ),
+      1
+    )
   }
 
   func testAssetsRecipesAndJobsSurviveReopen() async throws {
@@ -392,13 +418,13 @@ final class CatalogCoreTests: XCTestCase {
   func testFutureSchemaVersionIsRejectedWithoutChangingTheCatalog() throws {
     let catalogURL = try makeCatalogURL()
     let database = try openWritableDatabase(catalogURL)
-    try execute(database, "PRAGMA journal_mode=DELETE; PRAGMA user_version=2;")
+    try execute(database, "PRAGMA journal_mode=DELETE; PRAGMA user_version=3;")
     sqlite3_close_v2(database)
 
     XCTAssertThrowsError(try SQLiteCatalogStore(catalogURL: catalogURL))
     let reopened = try openDatabase(catalogURL)
     defer { sqlite3_close_v2(reopened) }
-    XCTAssertEqual(try scalarInt(reopened, "PRAGMA user_version;"), 2)
+    XCTAssertEqual(try scalarInt(reopened, "PRAGMA user_version;"), 3)
     XCTAssertEqual(try scalarString(reopened, "PRAGMA journal_mode;"), "delete")
   }
 

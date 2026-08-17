@@ -80,6 +80,7 @@ public struct PhotoAsset: Codable, Hashable, Sendable, Identifiable {
   public let rating: Int
   public let colorLabel: ColorLabel?
   public let isMissing: Bool
+  public let metadata: PhotoMetadata
 
   public init?(
     id: UUID = UUID(),
@@ -92,7 +93,8 @@ public struct PhotoAsset: Codable, Hashable, Sendable, Identifiable {
     pixelDimensions: PixelDimensions?,
     rating: Int = 0,
     colorLabel: ColorLabel? = nil,
-    isMissing: Bool = false
+    isMissing: Bool = false,
+    metadata: PhotoMetadata = .empty
   ) {
     guard (0...5).contains(rating) else {
       return nil
@@ -109,6 +111,7 @@ public struct PhotoAsset: Codable, Hashable, Sendable, Identifiable {
     self.rating = rating
     self.colorLabel = colorLabel
     self.isMissing = isMissing
+    self.metadata = metadata
   }
 
   public init(from decoder: any Decoder) throws {
@@ -127,6 +130,7 @@ public struct PhotoAsset: Codable, Hashable, Sendable, Identifiable {
     let rating = try container.decode(Int.self, forKey: .rating)
     let colorLabel = try container.decodeIfPresent(ColorLabel.self, forKey: .colorLabel)
     let isMissing = try container.decode(Bool.self, forKey: .isMissing)
+    let metadata = try container.decodeIfPresent(PhotoMetadata.self, forKey: .metadata) ?? .empty
 
     guard
       let asset = Self(
@@ -140,7 +144,8 @@ public struct PhotoAsset: Codable, Hashable, Sendable, Identifiable {
         pixelDimensions: pixelDimensions,
         rating: rating,
         colorLabel: colorLabel,
-        isMissing: isMissing
+        isMissing: isMissing,
+        metadata: metadata
       )
     else {
       throw DecodingError.dataCorruptedError(

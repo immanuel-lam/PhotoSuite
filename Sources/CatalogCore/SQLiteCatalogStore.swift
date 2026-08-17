@@ -67,8 +67,8 @@ private struct SQLiteIndexColumn: Equatable {
   let isKey: Bool
 }
 
-public actor SQLiteCatalogStore: CatalogStore, JobEngine {
-  private static let schemaVersion: Int64 = 1
+public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, JobEngine {
+  private static let schemaVersion: Int64 = 2
   private let connection: SQLiteConnection
   private let ftsAvailable: Bool
   private let encoder: JSONEncoder
@@ -158,8 +158,8 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
       """
       INSERT INTO assets (
         id, source_url, filename, type_identifier, fingerprint_json, import_ms,
-        capture_ms, dimensions_json, rating, color_label, is_missing
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        capture_ms, dimensions_json, rating, color_label, is_missing, metadata_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         source_url=excluded.source_url,
         filename=excluded.filename,
@@ -170,7 +170,8 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
         dimensions_json=excluded.dimensions_json,
         rating=excluded.rating,
         color_label=excluded.color_label,
-        is_missing=excluded.is_missing;
+        is_missing=excluded.is_missing,
+        metadata_json=excluded.metadata_json;
       """,
       operation: "asset.upsert"
     ) { statement in
@@ -207,8 +208,15 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
       try bind(
         asset.isMissing ? Int64(1) : Int64(0), to: statement, index: 11,
         operation: "asset.upsert")
+      try bind(
+        try encode(asset.metadata, operation: "asset.upsert.metadata"),
+        to: statement,
+        index: 12,
+        operation: "asset.upsert"
+      )
       try stepDone(statement, operation: "asset.upsert")
     }
+    try replaceKeywords(for: asset)
     try updateSearchIndex(for: asset)
   }
 
@@ -216,6 +224,151 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
     _ request: CatalogAssetFetchRequest
   ) async throws -> CatalogAssetFetchResult {
     CatalogAssetFetchResult(asset: try asset(id: request.assetID, operation: "asset.fetch"))
+  }
+
+  public func updateMetadata(
+    _ request: CatalogAssetMetadataUpdateRequest
+  ) async throws -> CatalogAssetMetadataUpdateResult {
+    guard let existing = try asset(id: request.assetID, operation: "asset.metadata.update") else {
+      throw CatalogStoreError.notFound(
+        operation: "asset.metadata.update", message: "The asset does not exist.")
+    }
+    guard
+      let updated = PhotoAsset(
+        id: existing.id,
+        sourceURL: existing.sourceURL,
+        filename: existing.filename,
+        typeIdentifier: existing.typeIdentifier,
+        fingerprint: existing.fingerprint,
+        importDate: existing.importDate,
+        captureDate: existing.captureDate,
+        pixelDimensions: existing.pixelDimensions,
+        rating: existing.rating,
+        colorLabel: existing.colorLabel,
+        isMissing: existing.isMissing,
+        metadata: request.metadata
+      )
+    else {
+      throw CatalogStoreError.invalidRequest(
+        operation: "asset.metadata.update", message: "The metadata record is invalid.")
+    }
+    try storeAsset(updated)
+    return CatalogAssetMetadataUpdateResult(asset: updated)
+  }
+
+  public func saveMetadataPreset(
+    _ request: CatalogMetadataPresetSaveRequest
+  ) async throws -> CatalogMetadataPresetSaveResult {
+    try withStatement(
+      """
+      INSERT INTO metadata_presets (id, name, created_ms, updated_ms, metadata_json)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        name=excluded.name,
+        created_ms=excluded.created_ms,
+        updated_ms=excluded.updated_ms,
+        metadata_json=excluded.metadata_json;
+      """,
+      operation: "metadataPreset.save"
+    ) { statement in
+      try bind(
+        request.preset.id.uuidString.lowercased(), to: statement, index: 1,
+        operation: "metadataPreset.save")
+      try bind(request.preset.name, to: statement, index: 2, operation: "metadataPreset.save")
+      try bind(
+        milliseconds(request.preset.createdAt), to: statement, index: 3,
+        operation: "metadataPreset.save")
+      try bind(
+        milliseconds(request.preset.updatedAt), to: statement, index: 4,
+        operation: "metadataPreset.save")
+      try bind(
+        try encode(request.preset.metadata, operation: "metadataPreset.save.metadata"),
+        to: statement,
+        index: 5,
+        operation: "metadataPreset.save"
+      )
+      try stepDone(statement, operation: "metadataPreset.save")
+    }
+    return CatalogMetadataPresetSaveResult(preset: request.preset)
+  }
+
+  public func listMetadataPresets(
+    _ request: CatalogMetadataPresetListRequest
+  ) async throws -> CatalogMetadataPresetListResult {
+    _ = request
+    let presets: [MetadataPreset] = try withStatement(
+      """
+      SELECT id, name, created_ms, updated_ms, metadata_json
+      FROM metadata_presets
+      ORDER BY name COLLATE NOCASE ASC, id ASC;
+      """,
+      operation: "metadataPreset.list"
+    ) { statement in
+      var results: [MetadataPreset] = []
+      while true {
+        let code = sqlite3_step(statement)
+        if code == SQLITE_DONE { break }
+        guard code == SQLITE_ROW else {
+          throw sqliteError(operation: "metadataPreset.list", code: code)
+        }
+        results.append(try decodeMetadataPreset(statement, operation: "metadataPreset.list"))
+      }
+      return results
+    }
+    return CatalogMetadataPresetListResult(presets: presets)
+  }
+
+  public func deleteMetadataPreset(
+    _ request: CatalogMetadataPresetDeleteRequest
+  ) async throws -> CatalogMetadataPresetDeleteResult {
+    try withStatement(
+      "DELETE FROM metadata_presets WHERE id = ?;", operation: "metadataPreset.delete"
+    ) { statement in
+      try bind(
+        request.presetID.uuidString.lowercased(), to: statement, index: 1,
+        operation: "metadataPreset.delete")
+      try stepDone(statement, operation: "metadataPreset.delete")
+    }
+    guard sqlite3_changes(database) == 1 else {
+      throw CatalogStoreError.notFound(
+        operation: "metadataPreset.delete", message: "The metadata preset does not exist.")
+    }
+    return CatalogMetadataPresetDeleteResult(presetID: request.presetID)
+  }
+
+  public func applyMetadataPreset(
+    _ request: CatalogApplyMetadataPresetRequest
+  ) async throws -> CatalogApplyMetadataPresetResult {
+    guard let existing = try asset(id: request.assetID, operation: "metadataPreset.apply") else {
+      throw CatalogStoreError.notFound(
+        operation: "metadataPreset.apply", message: "The asset does not exist.")
+    }
+    guard let preset = try metadataPreset(id: request.presetID, operation: "metadataPreset.apply")
+    else {
+      throw CatalogStoreError.notFound(
+        operation: "metadataPreset.apply", message: "The metadata preset does not exist.")
+    }
+    guard
+      let updated = PhotoAsset(
+        id: existing.id,
+        sourceURL: existing.sourceURL,
+        filename: existing.filename,
+        typeIdentifier: existing.typeIdentifier,
+        fingerprint: existing.fingerprint,
+        importDate: existing.importDate,
+        captureDate: existing.captureDate,
+        pixelDimensions: existing.pixelDimensions,
+        rating: existing.rating,
+        colorLabel: existing.colorLabel,
+        isMissing: existing.isMissing,
+        metadata: preset.metadata
+      )
+    else {
+      throw CatalogStoreError.decoding(
+        operation: "metadataPreset.apply", message: "The stored asset is invalid.")
+    }
+    try storeAsset(updated)
+    return CatalogApplyMetadataPresetResult(asset: updated)
   }
 
   public func listAssets(
@@ -247,7 +400,7 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
     return CatalogAssetListResult(
       assets: try assets(
         sql:
-          "SELECT id, source_url, filename, type_identifier, fingerprint_json, import_ms, capture_ms, dimensions_json, rating, color_label, is_missing FROM assets ORDER BY \(order) LIMIT ? OFFSET ?;",
+          "SELECT id, source_url, filename, type_identifier, fingerprint_json, import_ms, capture_ms, dimensions_json, rating, color_label, is_missing, metadata_json FROM assets ORDER BY \(order) LIMIT ? OFFSET ?;",
         operation: "asset.list",
         bindValues: { statement in
           try bind(limit, to: statement, index: 1, operation: "asset.list")
@@ -281,7 +434,8 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
           sql: """
             SELECT assets.id, assets.source_url, assets.filename, assets.type_identifier,
               assets.fingerprint_json, assets.import_ms, assets.capture_ms,
-              assets.dimensions_json, assets.rating, assets.color_label, assets.is_missing
+              assets.dimensions_json, assets.rating, assets.color_label, assets.is_missing,
+              assets.metadata_json
             FROM assets
             WHERE (
                 assets.id IN (
@@ -290,11 +444,23 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
                 OR assets.filename LIKE ? ESCAPE '\\'
                 OR COALESCE(assets.type_identifier, '') LIKE ? ESCAPE '\\'
                 OR assets.source_url LIKE ? ESCAPE '\\'
+                OR COALESCE(assets.metadata_json, '') LIKE ? ESCAPE '\\'
+                OR EXISTS (
+                  SELECT 1 FROM asset_keywords
+                  WHERE asset_keywords.asset_id = assets.id
+                    AND asset_keywords.normalized_keyword LIKE ? ESCAPE '\\'
+                )
               )
               AND (
                 assets.filename LIKE ? ESCAPE '\\'
                 OR COALESCE(assets.type_identifier, '') LIKE ? ESCAPE '\\'
                 OR assets.source_url LIKE ? ESCAPE '\\'
+                OR COALESCE(assets.metadata_json, '') LIKE ? ESCAPE '\\'
+                OR EXISTS (
+                  SELECT 1 FROM asset_keywords
+                  WHERE asset_keywords.asset_id = assets.id
+                    AND asset_keywords.normalized_keyword LIKE ? ESCAPE '\\'
+                )
               )
             ORDER BY assets.import_ms DESC, assets.id ASC
             LIMIT ?;
@@ -308,7 +474,11 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
             try bind(pattern, to: statement, index: 5, operation: "asset.search.fts")
             try bind(pattern, to: statement, index: 6, operation: "asset.search.fts")
             try bind(pattern, to: statement, index: 7, operation: "asset.search.fts")
-            try bind(limit, to: statement, index: 8, operation: "asset.search.fts")
+            try bind(pattern, to: statement, index: 8, operation: "asset.search.fts")
+            try bind(pattern, to: statement, index: 9, operation: "asset.search.fts")
+            try bind(pattern, to: statement, index: 10, operation: "asset.search.fts")
+            try bind(pattern.lowercased(), to: statement, index: 11, operation: "asset.search.fts")
+            try bind(limit, to: statement, index: 12, operation: "asset.search.fts")
           }
         )
       )
@@ -318,10 +488,16 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
       assets: try assets(
         sql: """
           SELECT id, source_url, filename, type_identifier, fingerprint_json, import_ms,
-            capture_ms, dimensions_json, rating, color_label, is_missing FROM assets
+            capture_ms, dimensions_json, rating, color_label, is_missing, metadata_json FROM assets
           WHERE filename LIKE ? ESCAPE '\\'
             OR COALESCE(type_identifier, '') LIKE ? ESCAPE '\\'
             OR source_url LIKE ? ESCAPE '\\'
+            OR COALESCE(metadata_json, '') LIKE ? ESCAPE '\\'
+            OR EXISTS (
+              SELECT 1 FROM asset_keywords
+              WHERE asset_keywords.asset_id = assets.id
+                AND asset_keywords.normalized_keyword LIKE ? ESCAPE '\\'
+            )
           ORDER BY import_ms DESC, id ASC
           LIMIT ?;
           """,
@@ -330,7 +506,9 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
           try bind(pattern, to: statement, index: 1, operation: "asset.search.like")
           try bind(pattern, to: statement, index: 2, operation: "asset.search.like")
           try bind(pattern, to: statement, index: 3, operation: "asset.search.like")
-          try bind(limit, to: statement, index: 4, operation: "asset.search.like")
+          try bind(pattern, to: statement, index: 4, operation: "asset.search.like")
+          try bind(pattern.lowercased(), to: statement, index: 5, operation: "asset.search.like")
+          try bind(limit, to: statement, index: 6, operation: "asset.search.like")
         }
       )
     )
@@ -410,7 +588,8 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
         pixelDimensions: existing.pixelDimensions,
         rating: existing.rating,
         colorLabel: existing.colorLabel,
-        isMissing: request.isMissing
+        isMissing: request.isMissing,
+        metadata: existing.metadata
       )
     else {
       throw CatalogStoreError.decoding(
@@ -453,7 +632,8 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
         pixelDimensions: existing.pixelDimensions,
         rating: existing.rating,
         colorLabel: existing.colorLabel,
-        isMissing: false
+        isMissing: false,
+        metadata: existing.metadata
       )
     else {
       throw CatalogStoreError.invalidRequest(
@@ -721,7 +901,7 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
 
   private func asset(id: UUID, operation: String) throws -> PhotoAsset? {
     try withStatement(
-      "SELECT id, source_url, filename, type_identifier, fingerprint_json, import_ms, capture_ms, dimensions_json, rating, color_label, is_missing FROM assets WHERE id = ?;",
+      "SELECT id, source_url, filename, type_identifier, fingerprint_json, import_ms, capture_ms, dimensions_json, rating, color_label, is_missing, metadata_json FROM assets WHERE id = ?;",
       operation: operation
     ) {
       statement in
@@ -730,6 +910,19 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
       if code == SQLITE_DONE { return nil }
       guard code == SQLITE_ROW else { throw sqliteError(operation: operation, code: code) }
       return try decodeAsset(statement, operation: operation)
+    }
+  }
+
+  private func metadataPreset(id: UUID, operation: String) throws -> MetadataPreset? {
+    try withStatement(
+      "SELECT id, name, created_ms, updated_ms, metadata_json FROM metadata_presets WHERE id = ?;",
+      operation: operation
+    ) { statement in
+      try bind(id.uuidString.lowercased(), to: statement, index: 1, operation: operation)
+      let code = sqlite3_step(statement)
+      if code == SQLITE_DONE { return nil }
+      guard code == SQLITE_ROW else { throw sqliteError(operation: operation, code: code) }
+      return try decodeMetadataPreset(statement, operation: operation)
     }
   }
 
@@ -831,6 +1024,32 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
         asset.sourceURL.absoluteString, to: statement, index: 4,
         operation: "asset.searchIndex.insert")
       try stepDone(statement, operation: "asset.searchIndex.insert")
+    }
+  }
+
+  private func replaceKeywords(for asset: PhotoAsset) throws {
+    try withStatement(
+      "DELETE FROM asset_keywords WHERE asset_id = ?;", operation: "asset.keywords.delete"
+    ) { statement in
+      try bind(assetID: asset.id, to: statement, index: 1, operation: "asset.keywords.delete")
+      try stepDone(statement, operation: "asset.keywords.delete")
+    }
+    guard !asset.metadata.keywords.isEmpty else { return }
+    for keyword in asset.metadata.keywords {
+      try withStatement(
+        """
+        INSERT INTO asset_keywords (asset_id, keyword, normalized_keyword)
+        VALUES (?, ?, ?)
+        ON CONFLICT(asset_id, normalized_keyword) DO UPDATE SET keyword=excluded.keyword;
+        """,
+        operation: "asset.keywords.insert"
+      ) { statement in
+        try bind(assetID: asset.id, to: statement, index: 1, operation: "asset.keywords.insert")
+        try bind(keyword, to: statement, index: 2, operation: "asset.keywords.insert")
+        try bind(
+          keyword.lowercased(), to: statement, index: 3, operation: "asset.keywords.insert")
+        try stepDone(statement, operation: "asset.keywords.insert")
+      }
     }
   }
 
@@ -1118,13 +1337,47 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
         colorLabel: try optionalColumnData(statement, column: 9).map {
           try decode(ColorLabel.self, from: $0, operation: operation)
         },
-        isMissing: missing == 1
+        isMissing: missing == 1,
+        metadata: try optionalColumnData(statement, column: 11).map {
+          try decode(PhotoMetadata.self, from: $0, operation: operation)
+        } ?? .empty
       )
     else {
       throw CatalogStoreError.decoding(
         operation: operation, message: "The normalized asset row is invalid.")
     }
     return asset
+  }
+
+  private func decodeMetadataPreset(
+    _ statement: OpaquePointer,
+    operation: String
+  ) throws -> MetadataPreset {
+    guard let id = UUID(uuidString: try columnString(statement, column: 0, operation: operation))
+    else {
+      throw CatalogStoreError.decoding(operation: operation, message: "The preset ID is invalid.")
+    }
+    let name = try columnString(statement, column: 1, operation: operation)
+    let createdAt = optionalDate(statement, column: 2) ?? .distantPast
+    let updatedAt = optionalDate(statement, column: 3) ?? .distantPast
+    let metadata = try decode(
+      PhotoMetadata.self,
+      from: columnData(statement, column: 4, operation: operation),
+      operation: operation
+    )
+    guard
+      let preset = MetadataPreset(
+        id: id,
+        name: name,
+        metadata: metadata,
+        createdAt: createdAt,
+        updatedAt: updatedAt
+      )
+    else {
+      throw CatalogStoreError.decoding(
+        operation: operation, message: "The stored metadata preset is invalid.")
+    }
+    return preset
   }
 
   private func encode<T: Encodable>(_ value: T, operation: String) throws -> Data {
@@ -1217,9 +1470,15 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
   {
     let shouldUseFTS = ftsAvailabilityOverride ?? (sqlite3_compileoption_used("ENABLE_FTS5") != 0)
     if version == schemaVersion {
-      return try validateVersionOneSchema(database, shouldUseFTS: shouldUseFTS)
+      return try validateVersionTwoSchema(database, shouldUseFTS: shouldUseFTS)
+    }
+    if version == 1 {
+      let ftsAvailable = try validateVersionOneSchema(database, shouldUseFTS: shouldUseFTS)
+      try migrateToVersionTwo(database)
+      return ftsAvailable
     }
 
+    var ftsAvailable = false
     try execute("BEGIN IMMEDIATE;", database: database, operation: "catalog.migrate.begin")
     do {
       try execute(
@@ -1263,7 +1522,6 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
         database: database,
         operation: "catalog.migrate.v1"
       )
-      var ftsAvailable = false
       if shouldUseFTS {
         do {
           try execute(
@@ -1288,7 +1546,6 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
       try execute(
         "PRAGMA user_version=1;", database: database, operation: "catalog.migrate.setVersion")
       try execute("COMMIT;", database: database, operation: "catalog.migrate.commit")
-      return ftsAvailable
     } catch let primaryError {
       do {
         try execute("ROLLBACK;", database: database, operation: "catalog.migrate.rollback")
@@ -1301,6 +1558,184 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
       }
       throw primaryError
     }
+    try migrateToVersionTwo(database)
+    return ftsAvailable
+  }
+
+  private static func migrateToVersionTwo(_ database: OpaquePointer) throws {
+    try execute("BEGIN IMMEDIATE;", database: database, operation: "catalog.migrate.v2.begin")
+    do {
+      try execute(
+        """
+        ALTER TABLE assets ADD COLUMN metadata_json BLOB;
+        CREATE TABLE asset_keywords (
+          asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+          keyword TEXT NOT NULL,
+          normalized_keyword TEXT NOT NULL,
+          PRIMARY KEY (asset_id, normalized_keyword)
+        );
+        CREATE INDEX asset_keywords_keyword_index
+          ON asset_keywords(normalized_keyword);
+        CREATE TABLE metadata_presets (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          created_ms INTEGER NOT NULL,
+          updated_ms INTEGER NOT NULL,
+          metadata_json BLOB NOT NULL
+        );
+        CREATE UNIQUE INDEX metadata_presets_name_index
+          ON metadata_presets(name COLLATE NOCASE);
+        PRAGMA user_version=2;
+        """,
+        database: database,
+        operation: "catalog.migrate.v2"
+      )
+      try execute("COMMIT;", database: database, operation: "catalog.migrate.v2.commit")
+    } catch let primaryError {
+      do {
+        try execute("ROLLBACK;", database: database, operation: "catalog.migrate.v2.rollback")
+      } catch let rollbackError {
+        throw CatalogStoreError.cleanup(
+          operation: "catalog.migrate.v2",
+          primaryError: String(describing: primaryError),
+          cleanupError: String(describing: rollbackError)
+        )
+      }
+      throw primaryError
+    }
+  }
+
+  private static func validateVersionTwoSchema(
+    _ database: OpaquePointer,
+    shouldUseFTS: Bool
+  ) throws -> Bool {
+    let requiredColumns: [String: [SQLiteSchemaColumn]] = [
+      "assets": [
+        .init(
+          position: 0, name: "id", type: "TEXT", isNotNull: false, defaultValue: nil,
+          primaryKeyPosition: 1),
+        .init(
+          position: 1, name: "source_url", type: "TEXT", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
+        .init(
+          position: 2, name: "filename", type: "TEXT", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
+        .init(
+          position: 3, name: "type_identifier", type: "TEXT", isNotNull: false,
+          defaultValue: nil, primaryKeyPosition: 0),
+        .init(
+          position: 4, name: "fingerprint_json", type: "BLOB", isNotNull: true,
+          defaultValue: nil, primaryKeyPosition: 0),
+        .init(
+          position: 5, name: "import_ms", type: "INTEGER", isNotNull: true,
+          defaultValue: nil, primaryKeyPosition: 0),
+        .init(
+          position: 6, name: "capture_ms", type: "INTEGER", isNotNull: false,
+          defaultValue: nil, primaryKeyPosition: 0),
+        .init(
+          position: 7, name: "dimensions_json", type: "BLOB", isNotNull: false,
+          defaultValue: nil, primaryKeyPosition: 0),
+        .init(
+          position: 8, name: "rating", type: "INTEGER", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
+        .init(
+          position: 9, name: "color_label", type: "BLOB", isNotNull: false,
+          defaultValue: nil, primaryKeyPosition: 0),
+        .init(
+          position: 10, name: "is_missing", type: "INTEGER", isNotNull: true,
+          defaultValue: nil, primaryKeyPosition: 0),
+        .init(
+          position: 11, name: "metadata_json", type: "BLOB", isNotNull: false,
+          defaultValue: nil, primaryKeyPosition: 0),
+      ],
+      "asset_keywords": [
+        .init(
+          position: 0, name: "asset_id", type: "TEXT", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 1),
+        .init(
+          position: 1, name: "keyword", type: "TEXT", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
+        .init(
+          position: 2, name: "normalized_keyword", type: "TEXT", isNotNull: true,
+          defaultValue: nil, primaryKeyPosition: 2),
+      ],
+      "metadata_presets": [
+        .init(
+          position: 0, name: "id", type: "TEXT", isNotNull: false, defaultValue: nil,
+          primaryKeyPosition: 1),
+        .init(
+          position: 1, name: "name", type: "TEXT", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
+        .init(
+          position: 2, name: "created_ms", type: "INTEGER", isNotNull: true,
+          defaultValue: nil, primaryKeyPosition: 0),
+        .init(
+          position: 3, name: "updated_ms", type: "INTEGER", isNotNull: true,
+          defaultValue: nil, primaryKeyPosition: 0),
+        .init(
+          position: 4, name: "metadata_json", type: "BLOB", isNotNull: true,
+          defaultValue: nil, primaryKeyPosition: 0),
+      ],
+    ]
+    for (table, expected) in requiredColumns {
+      guard try tableExists(database, name: table) else {
+        throw schemaError("The required table '\(table)' is missing.")
+      }
+      guard try tableColumns(database, table: table) == expected else {
+        throw schemaError("The table '\(table)' does not have the exact version-2 columns.")
+      }
+    }
+    try validateSchemaSQL(
+      database,
+      object: "asset_keywords",
+      type: "table",
+      expectedSQL: """
+        CREATE TABLE asset_keywords (
+          asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+          keyword TEXT NOT NULL,
+          normalized_keyword TEXT NOT NULL,
+          PRIMARY KEY (asset_id, normalized_keyword)
+        )
+        """
+    )
+    try validateSchemaSQL(
+      database,
+      object: "metadata_presets",
+      type: "table",
+      expectedSQL: """
+        CREATE TABLE metadata_presets (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          created_ms INTEGER NOT NULL,
+          updated_ms INTEGER NOT NULL,
+          metadata_json BLOB NOT NULL
+        )
+        """
+    )
+    try validateForeignKey(
+      database, table: "asset_keywords", column: "asset_id", referencedTable: "assets")
+
+    if shouldUseFTS {
+      guard try tableExists(database, name: "asset_search") else {
+        throw schemaError("The required FTS5 table 'asset_search' is missing.")
+      }
+      try validateSchemaSQL(
+        database,
+        object: "asset_search",
+        type: "table",
+        expectedSQL:
+          "CREATE VIRTUAL TABLE asset_search USING fts5(asset_id UNINDEXED, filename, type_identifier, source_url)"
+      )
+    }
+    let queries = [
+      "SELECT id, source_url, filename, type_identifier, fingerprint_json, import_ms, capture_ms, dimensions_json, rating, color_label, is_missing, metadata_json FROM assets WHERE id = ?;",
+      "SELECT keyword FROM asset_keywords WHERE asset_id = ? LIMIT 1;",
+      "SELECT id, name, created_ms, updated_ms, metadata_json FROM metadata_presets WHERE id = ?;",
+    ]
+    for query in queries {
+      try validateQuery(database, sql: query)
+    }
+    return shouldUseFTS
   }
 
   private static func withStaticStatement<T>(
