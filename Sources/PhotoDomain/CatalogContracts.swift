@@ -114,6 +114,126 @@ public struct CatalogApplyMetadataPresetResult: Codable, Hashable, Sendable {
   }
 }
 
+public struct CatalogCollectionSaveRequest: Codable, Hashable, Sendable {
+  public let collection: PhotoCollection
+
+  public init(collection: PhotoCollection) {
+    self.collection = collection
+  }
+}
+
+public struct CatalogCollectionSaveResult: Codable, Hashable, Sendable {
+  public let collection: PhotoCollection
+
+  public init(collection: PhotoCollection) {
+    self.collection = collection
+  }
+}
+
+public struct CatalogCollectionListRequest: Codable, Hashable, Sendable {
+  public init() {}
+}
+
+public struct CatalogCollectionListResult: Codable, Hashable, Sendable {
+  public let collections: [PhotoCollection]
+
+  public init(collections: [PhotoCollection]) {
+    self.collections = collections
+  }
+}
+
+public struct CatalogCollectionDeleteRequest: Codable, Hashable, Sendable {
+  public let collectionID: UUID
+
+  public init(collectionID: UUID) {
+    self.collectionID = collectionID
+  }
+}
+
+public struct CatalogCollectionDeleteResult: Codable, Hashable, Sendable {
+  public let collectionID: UUID
+
+  public init(collectionID: UUID) {
+    self.collectionID = collectionID
+  }
+}
+
+public struct CatalogCollectionAssetsRequest: Codable, Hashable, Sendable {
+  public let collectionID: UUID
+
+  public init(collectionID: UUID) {
+    self.collectionID = collectionID
+  }
+}
+
+public struct CatalogCollectionAssetsResult: Codable, Hashable, Sendable {
+  public let assets: [PhotoAsset]
+
+  public init(assets: [PhotoAsset]) {
+    self.assets = assets
+  }
+}
+
+public struct CatalogStackSaveRequest: Codable, Hashable, Sendable {
+  public let stack: PhotoStack
+
+  public init(stack: PhotoStack) {
+    self.stack = stack
+  }
+}
+
+public struct CatalogStackSaveResult: Codable, Hashable, Sendable {
+  public let stack: PhotoStack
+
+  public init(stack: PhotoStack) {
+    self.stack = stack
+  }
+}
+
+public struct CatalogStackListRequest: Codable, Hashable, Sendable {
+  public init() {}
+}
+
+public struct CatalogStackListResult: Codable, Hashable, Sendable {
+  public let stacks: [PhotoStack]
+
+  public init(stacks: [PhotoStack]) {
+    self.stacks = stacks
+  }
+}
+
+public struct CatalogStackDeleteRequest: Codable, Hashable, Sendable {
+  public let stackID: UUID
+
+  public init(stackID: UUID) {
+    self.stackID = stackID
+  }
+}
+
+public struct CatalogStackDeleteResult: Codable, Hashable, Sendable {
+  public let stackID: UUID
+
+  public init(stackID: UUID) {
+    self.stackID = stackID
+  }
+}
+
+public struct CatalogStackAssetsRequest: Codable, Hashable, Sendable {
+  public let stackID: UUID
+
+  public init(stackID: UUID) {
+    self.stackID = stackID
+  }
+}
+
+public struct CatalogStackAssetsResult: Codable, Hashable, Sendable {
+  public let assets: [PhotoAsset]
+
+  public init(assets: [PhotoAsset]) {
+    self.assets = assets
+  }
+}
+
 public enum CatalogAssetOrder: String, Codable, Hashable, Sendable {
   case importDateAscending
   case importDateDescending
@@ -300,6 +420,22 @@ public protocol MetadataCatalogStore: CatalogStore {
     -> CatalogMetadataPresetDeleteResult
   func applyMetadataPreset(_ request: CatalogApplyMetadataPresetRequest) async throws
     -> CatalogApplyMetadataPresetResult
+}
+
+public protocol LibraryCatalogStore: CatalogStore {
+  func saveCollection(_ request: CatalogCollectionSaveRequest) async throws
+    -> CatalogCollectionSaveResult
+  func listCollections(_ request: CatalogCollectionListRequest) async throws
+    -> CatalogCollectionListResult
+  func deleteCollection(_ request: CatalogCollectionDeleteRequest) async throws
+    -> CatalogCollectionDeleteResult
+  func listCollectionAssets(_ request: CatalogCollectionAssetsRequest) async throws
+    -> CatalogCollectionAssetsResult
+  func saveStack(_ request: CatalogStackSaveRequest) async throws -> CatalogStackSaveResult
+  func listStacks(_ request: CatalogStackListRequest) async throws -> CatalogStackListResult
+  func deleteStack(_ request: CatalogStackDeleteRequest) async throws -> CatalogStackDeleteResult
+  func listStackAssets(_ request: CatalogStackAssetsRequest) async throws
+    -> CatalogStackAssetsResult
 }
 
 public struct JobEnqueueRequest: Codable, Hashable, Sendable {

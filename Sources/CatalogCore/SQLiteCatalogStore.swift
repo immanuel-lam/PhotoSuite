@@ -67,8 +67,8 @@ private struct SQLiteIndexColumn: Equatable {
   let isKey: Bool
 }
 
-public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, JobEngine {
-  private static let schemaVersion: Int64 = 2
+public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCatalogStore, JobEngine {
+  private static let schemaVersion: Int64 = 3
   private let connection: SQLiteConnection
   private let ftsAvailable: Bool
   private let encoder: JSONEncoder
@@ -369,6 +369,298 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, JobEngine {
     }
     try storeAsset(updated)
     return CatalogApplyMetadataPresetResult(asset: updated)
+  }
+
+  public func saveCollection(
+    _ request: CatalogCollectionSaveRequest
+  ) async throws -> CatalogCollectionSaveResult {
+    let collection = request.collection
+    if collection.kind == .regular && !collection.assetIDs.isEmpty {
+      guard try allAssetsExist(collection.assetIDs, operation: "collection.save") else {
+        throw CatalogStoreError.notFound(
+          operation: "collection.save", message: "A collection member asset does not exist.")
+      }
+    }
+    if let existingID = try collectionID(named: collection.name, operation: "collection.save"),
+      existingID != collection.id
+    {
+      throw CatalogStoreError.invalidRequest(
+        operation: "collection.save", message: "A collection with this name already exists.")
+    }
+    let predicate = try collection.predicate.map {
+      try encode($0, operation: "collection.save.predicate")
+    }
+    try withTransaction(operation: "collection.save") {
+      try withStatement(
+        """
+        INSERT INTO collections (id, name, kind, created_ms, updated_ms, predicate_json)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          name=excluded.name,
+          kind=excluded.kind,
+          created_ms=excluded.created_ms,
+          updated_ms=excluded.updated_ms,
+          predicate_json=excluded.predicate_json;
+        """,
+        operation: "collection.save"
+      ) { statement in
+        try bind(assetID: collection.id, to: statement, index: 1, operation: "collection.save")
+        try bind(collection.name, to: statement, index: 2, operation: "collection.save")
+        try bind(collection.kind.rawValue, to: statement, index: 3, operation: "collection.save")
+        try bind(milliseconds(collection.createdAt), to: statement, index: 4, operation: "collection.save")
+        try bind(milliseconds(collection.updatedAt), to: statement, index: 5, operation: "collection.save")
+        try bind(predicate, to: statement, index: 6, operation: "collection.save")
+        try stepDone(statement, operation: "collection.save")
+      }
+      try withStatement(
+        "DELETE FROM collection_assets WHERE collection_id = ?;",
+        operation: "collection.members.delete"
+      ) { statement in
+        try bind(assetID: collection.id, to: statement, index: 1, operation: "collection.members.delete")
+        try stepDone(statement, operation: "collection.members.delete")
+      }
+      for (position, assetID) in collection.assetIDs.enumerated() {
+        try withStatement(
+          "INSERT INTO collection_assets (collection_id, asset_id, position) VALUES (?, ?, ?);",
+          operation: "collection.members.insert"
+        ) { statement in
+          try bind(assetID: collection.id, to: statement, index: 1, operation: "collection.members.insert")
+          try bind(assetID: assetID, to: statement, index: 2, operation: "collection.members.insert")
+          try bind(
+            Int64(position), to: statement, index: 3, operation: "collection.members.insert")
+          try stepDone(statement, operation: "collection.members.insert")
+        }
+      }
+    }
+    return CatalogCollectionSaveResult(collection: collection)
+  }
+
+  public func listCollections(
+    _ request: CatalogCollectionListRequest
+  ) async throws -> CatalogCollectionListResult {
+    _ = request
+    let collections: [PhotoCollection] = try withStatement(
+      """
+      SELECT id, name, kind, created_ms, updated_ms, predicate_json
+      FROM collections
+      ORDER BY name COLLATE NOCASE ASC, id ASC;
+      """,
+      operation: "collection.list"
+    ) { statement in
+      var results: [PhotoCollection] = []
+      while true {
+        let code = sqlite3_step(statement)
+        if code == SQLITE_DONE { break }
+        guard code == SQLITE_ROW else { throw sqliteError(operation: "collection.list", code: code) }
+        results.append(try decodeCollection(statement, operation: "collection.list"))
+      }
+      return results
+    }
+    let withMembers = try collections.map { collection in
+      guard collection.kind == .regular else { return collection }
+      guard
+        let updated = PhotoCollection(
+          id: collection.id,
+          name: collection.name,
+          kind: collection.kind,
+          predicate: collection.predicate,
+          assetIDs: try assetIDs(forCollectionID: collection.id, operation: "collection.list"),
+          createdAt: collection.createdAt,
+          updatedAt: collection.updatedAt
+        )
+      else {
+        throw CatalogStoreError.decoding(
+          operation: "collection.list", message: "The stored collection membership is invalid.")
+      }
+      return updated
+    }
+    return CatalogCollectionListResult(collections: withMembers)
+  }
+
+  public func deleteCollection(
+    _ request: CatalogCollectionDeleteRequest
+  ) async throws -> CatalogCollectionDeleteResult {
+    try withStatement(
+      "DELETE FROM collections WHERE id = ?;", operation: "collection.delete"
+    ) { statement in
+      try bind(assetID: request.collectionID, to: statement, index: 1, operation: "collection.delete")
+      try stepDone(statement, operation: "collection.delete")
+    }
+    guard sqlite3_changes(database) == 1 else {
+      throw CatalogStoreError.notFound(
+        operation: "collection.delete", message: "The collection does not exist.")
+    }
+    return CatalogCollectionDeleteResult(collectionID: request.collectionID)
+  }
+
+  public func listCollectionAssets(
+    _ request: CatalogCollectionAssetsRequest
+  ) async throws -> CatalogCollectionAssetsResult {
+    guard let collection = try collection(id: request.collectionID, operation: "collection.assets")
+    else {
+      throw CatalogStoreError.notFound(
+        operation: "collection.assets", message: "The collection does not exist.")
+    }
+    let matchingAssets: [PhotoAsset]
+    switch collection.kind {
+    case .regular:
+      matchingAssets = try assets(
+        sql: """
+          SELECT assets.id, assets.source_url, assets.filename, assets.type_identifier,
+            assets.fingerprint_json, assets.import_ms, assets.capture_ms,
+            assets.dimensions_json, assets.rating, assets.color_label, assets.is_missing,
+            assets.metadata_json
+          FROM collection_assets
+          JOIN assets ON assets.id = collection_assets.asset_id
+          WHERE collection_assets.collection_id = ?
+          ORDER BY collection_assets.position ASC;
+          """,
+        operation: "collection.assets.regular",
+        bindValues: { statement in
+          try bind(assetID: collection.id, to: statement, index: 1, operation: "collection.assets.regular")
+        }
+      )
+    case .smart:
+      guard let predicate = collection.predicate else {
+        throw CatalogStoreError.decoding(
+          operation: "collection.assets.smart", message: "The smart collection has no predicate.")
+      }
+      let allAssets = try assets(
+        sql: """
+          SELECT id, source_url, filename, type_identifier, fingerprint_json, import_ms,
+            capture_ms, dimensions_json, rating, color_label, is_missing, metadata_json
+          FROM assets
+          ORDER BY import_ms DESC, id ASC;
+          """,
+        operation: "collection.assets.smart",
+        bindValues: { _ in }
+      )
+      matchingAssets = allAssets.filter(predicate.matches)
+    }
+    return CatalogCollectionAssetsResult(assets: matchingAssets)
+  }
+
+  public func saveStack(_ request: CatalogStackSaveRequest) async throws -> CatalogStackSaveResult {
+    let stack = request.stack
+    guard try allAssetsExist(stack.assetIDs, operation: "stack.save") else {
+      throw CatalogStoreError.notFound(
+        operation: "stack.save", message: "A stack member asset does not exist.")
+    }
+    try withTransaction(operation: "stack.save") {
+      try withStatement(
+        """
+        INSERT INTO photo_stacks (
+          id, representative_asset_id, is_collapsed, created_ms, updated_ms
+        ) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          representative_asset_id=excluded.representative_asset_id,
+          is_collapsed=excluded.is_collapsed,
+          created_ms=excluded.created_ms,
+          updated_ms=excluded.updated_ms;
+        """,
+        operation: "stack.save"
+      ) { statement in
+        try bind(assetID: stack.id, to: statement, index: 1, operation: "stack.save")
+        try bind(assetID: stack.representativeAssetID, to: statement, index: 2, operation: "stack.save")
+        try bind(stack.isCollapsed ? Int64(1) : Int64(0), to: statement, index: 3, operation: "stack.save")
+        try bind(milliseconds(stack.createdAt), to: statement, index: 4, operation: "stack.save")
+        try bind(milliseconds(stack.updatedAt), to: statement, index: 5, operation: "stack.save")
+        try stepDone(statement, operation: "stack.save")
+      }
+      try withStatement(
+        "DELETE FROM stack_assets WHERE stack_id = ?;", operation: "stack.members.delete"
+      ) { statement in
+        try bind(assetID: stack.id, to: statement, index: 1, operation: "stack.members.delete")
+        try stepDone(statement, operation: "stack.members.delete")
+      }
+      for (position, assetID) in stack.assetIDs.enumerated() {
+        try withStatement(
+          "INSERT INTO stack_assets (stack_id, asset_id, position) VALUES (?, ?, ?);",
+          operation: "stack.members.insert"
+        ) { statement in
+          try bind(assetID: stack.id, to: statement, index: 1, operation: "stack.members.insert")
+          try bind(assetID: assetID, to: statement, index: 2, operation: "stack.members.insert")
+          try bind(Int64(position), to: statement, index: 3, operation: "stack.members.insert")
+          try stepDone(statement, operation: "stack.members.insert")
+        }
+      }
+    }
+    return CatalogStackSaveResult(stack: stack)
+  }
+
+  public func listStacks(_ request: CatalogStackListRequest) async throws -> CatalogStackListResult {
+    _ = request
+    let stacks: [PhotoStack] = try withStatement(
+      """
+      SELECT id, representative_asset_id, is_collapsed, created_ms, updated_ms
+      FROM photo_stacks
+      ORDER BY updated_ms DESC, id ASC;
+      """,
+      operation: "stack.list"
+    ) { statement in
+      var results: [PhotoStack] = []
+      while true {
+        let code = sqlite3_step(statement)
+        if code == SQLITE_DONE { break }
+        guard code == SQLITE_ROW else { throw sqliteError(operation: "stack.list", code: code) }
+        results.append(try decodeStack(statement, operation: "stack.list"))
+      }
+      return results
+    }
+    return CatalogStackListResult(stacks: try stacks.map { stack in
+      guard
+        let updated = PhotoStack(
+          id: stack.id,
+          assetIDs: try assetIDs(forStackID: stack.id, operation: "stack.list"),
+          representativeAssetID: stack.representativeAssetID,
+          isCollapsed: stack.isCollapsed,
+          createdAt: stack.createdAt,
+          updatedAt: stack.updatedAt
+        )
+      else {
+        throw CatalogStoreError.decoding(
+          operation: "stack.list", message: "The stored stack membership is invalid.")
+      }
+      return updated
+    })
+  }
+
+  public func deleteStack(_ request: CatalogStackDeleteRequest) async throws -> CatalogStackDeleteResult {
+    try withStatement("DELETE FROM photo_stacks WHERE id = ?;", operation: "stack.delete") {
+      statement in
+      try bind(assetID: request.stackID, to: statement, index: 1, operation: "stack.delete")
+      try stepDone(statement, operation: "stack.delete")
+    }
+    guard sqlite3_changes(database) == 1 else {
+      throw CatalogStoreError.notFound(operation: "stack.delete", message: "The stack does not exist.")
+    }
+    return CatalogStackDeleteResult(stackID: request.stackID)
+  }
+
+  public func listStackAssets(
+    _ request: CatalogStackAssetsRequest
+  ) async throws -> CatalogStackAssetsResult {
+    guard try stack(id: request.stackID, operation: "stack.assets") != nil else {
+      throw CatalogStoreError.notFound(operation: "stack.assets", message: "The stack does not exist.")
+    }
+    return CatalogStackAssetsResult(
+      assets: try assets(
+        sql: """
+          SELECT assets.id, assets.source_url, assets.filename, assets.type_identifier,
+            assets.fingerprint_json, assets.import_ms, assets.capture_ms,
+            assets.dimensions_json, assets.rating, assets.color_label, assets.is_missing,
+            assets.metadata_json
+          FROM stack_assets
+          JOIN assets ON assets.id = stack_assets.asset_id
+          WHERE stack_assets.stack_id = ?
+          ORDER BY stack_assets.position ASC;
+          """,
+        operation: "stack.assets",
+        bindValues: { statement in
+          try bind(assetID: request.stackID, to: statement, index: 1, operation: "stack.assets")
+        }
+      )
+    )
   }
 
   public func listAssets(
@@ -913,6 +1205,113 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, JobEngine {
     }
   }
 
+  private func collection(id: UUID, operation: String) throws -> PhotoCollection? {
+    try withStatement(
+      "SELECT id, name, kind, created_ms, updated_ms, predicate_json FROM collections WHERE id = ?;",
+      operation: operation
+    ) { statement in
+      try bind(assetID: id, to: statement, index: 1, operation: operation)
+      let code = sqlite3_step(statement)
+      if code == SQLITE_DONE { return nil }
+      guard code == SQLITE_ROW else { throw sqliteError(operation: operation, code: code) }
+      return try decodeCollection(statement, operation: operation)
+    }
+  }
+
+  private func stack(id: UUID, operation: String) throws -> PhotoStack? {
+    try withStatement(
+      "SELECT id, representative_asset_id, is_collapsed, created_ms, updated_ms FROM photo_stacks WHERE id = ?;",
+      operation: operation
+    ) { statement in
+      try bind(assetID: id, to: statement, index: 1, operation: operation)
+      let code = sqlite3_step(statement)
+      if code == SQLITE_DONE { return nil }
+      guard code == SQLITE_ROW else { throw sqliteError(operation: operation, code: code) }
+      let stored = try decodeStack(statement, operation: operation)
+      guard
+        let complete = PhotoStack(
+          id: stored.id,
+          assetIDs: try assetIDs(forStackID: stored.id, operation: operation),
+          representativeAssetID: stored.representativeAssetID,
+          isCollapsed: stored.isCollapsed,
+          createdAt: stored.createdAt,
+          updatedAt: stored.updatedAt
+        )
+      else {
+        throw CatalogStoreError.decoding(
+          operation: operation, message: "The stored stack membership is invalid.")
+      }
+      return complete
+    }
+  }
+
+  private func collectionID(named name: String, operation: String) throws -> UUID? {
+    try withStatement(
+      "SELECT id FROM collections WHERE name = ? COLLATE NOCASE LIMIT 1;", operation: operation
+    ) { statement in
+      try bind(name, to: statement, index: 1, operation: operation)
+      let code = sqlite3_step(statement)
+      if code == SQLITE_DONE { return nil }
+      guard code == SQLITE_ROW else { throw sqliteError(operation: operation, code: code) }
+      guard let id = UUID(uuidString: try columnString(statement, column: 0, operation: operation))
+      else {
+        throw CatalogStoreError.decoding(operation: operation, message: "The collection ID is invalid.")
+      }
+      return id
+    }
+  }
+
+  private func allAssetsExist(_ ids: [UUID], operation: String) throws -> Bool {
+    guard !ids.isEmpty else { return true }
+    let placeholders = Array(repeating: "?", count: ids.count).joined(separator: ",")
+    let count = try withStatement(
+      "SELECT COUNT(*) FROM assets WHERE id IN (\(placeholders));", operation: operation
+    ) { statement in
+      for (index, id) in ids.enumerated() {
+        try bind(
+          assetID: id, to: statement, index: Int32(index + 1), operation: operation)
+      }
+      let code = sqlite3_step(statement)
+      guard code == SQLITE_ROW else { throw sqliteError(operation: operation, code: code) }
+      return sqlite3_column_int64(statement, 0)
+    }
+    return count == Int64(ids.count)
+  }
+
+  private func assetIDs(forCollectionID id: UUID, operation: String) throws -> [UUID] {
+    try relatedAssetIDs(
+      sql: "SELECT asset_id FROM collection_assets WHERE collection_id = ? ORDER BY position ASC;",
+      id: id,
+      operation: operation
+    )
+  }
+
+  private func assetIDs(forStackID id: UUID, operation: String) throws -> [UUID] {
+    try relatedAssetIDs(
+      sql: "SELECT asset_id FROM stack_assets WHERE stack_id = ? ORDER BY position ASC;",
+      id: id,
+      operation: operation
+    )
+  }
+
+  private func relatedAssetIDs(sql: String, id: UUID, operation: String) throws -> [UUID] {
+    try withStatement(sql, operation: operation) { statement in
+      try bind(assetID: id, to: statement, index: 1, operation: operation)
+      var ids: [UUID] = []
+      while true {
+        let code = sqlite3_step(statement)
+        if code == SQLITE_DONE { break }
+        guard code == SQLITE_ROW else { throw sqliteError(operation: operation, code: code) }
+        guard let assetID = UUID(uuidString: try columnString(statement, column: 0, operation: operation))
+        else {
+          throw CatalogStoreError.decoding(operation: operation, message: "A related asset ID is invalid.")
+        }
+        ids.append(assetID)
+      }
+      return ids
+    }
+  }
+
   private func metadataPreset(id: UUID, operation: String) throws -> MetadataPreset? {
     try withStatement(
       "SELECT id, name, created_ms, updated_ms, metadata_json FROM metadata_presets WHERE id = ?;",
@@ -1349,6 +1748,72 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, JobEngine {
     return asset
   }
 
+  private func decodeCollection(
+    _ statement: OpaquePointer,
+    operation: String
+  ) throws -> PhotoCollection {
+    guard let id = UUID(uuidString: try columnString(statement, column: 0, operation: operation))
+    else {
+      throw CatalogStoreError.decoding(operation: operation, message: "The collection ID is invalid.")
+    }
+    let name = try columnString(statement, column: 1, operation: operation)
+    guard let kind = PhotoCollection.Kind(
+      rawValue: try columnString(statement, column: 2, operation: operation))
+    else {
+      throw CatalogStoreError.decoding(operation: operation, message: "The collection kind is invalid.")
+    }
+    let predicate = try optionalColumnData(statement, column: 5).map {
+      try decode(
+        SmartCollectionPredicate.self, from: $0, operation: "\(operation).predicate")
+    }
+    guard
+      let collection = PhotoCollection(
+        id: id,
+        name: name,
+        kind: kind,
+        predicate: predicate,
+        createdAt: optionalDate(statement, column: 3) ?? .distantPast,
+        updatedAt: optionalDate(statement, column: 4) ?? .distantPast
+      )
+    else {
+      throw CatalogStoreError.decoding(
+        operation: operation, message: "The stored collection is invalid.")
+    }
+    return collection
+  }
+
+  private func decodeStack(_ statement: OpaquePointer, operation: String) throws -> PhotoStack {
+    guard let id = UUID(uuidString: try columnString(statement, column: 0, operation: operation))
+    else {
+      throw CatalogStoreError.decoding(operation: operation, message: "The stack ID is invalid.")
+    }
+    guard
+      let representativeAssetID = UUID(
+        uuidString: try columnString(statement, column: 1, operation: operation))
+    else {
+      throw CatalogStoreError.decoding(
+        operation: operation, message: "The stack representative asset ID is invalid.")
+    }
+    let collapsed = sqlite3_column_int64(statement, 2)
+    guard collapsed == 0 || collapsed == 1 else {
+      throw CatalogStoreError.decoding(
+        operation: operation, message: "The stack collapsed flag is invalid.")
+    }
+    guard
+      let stack = PhotoStack(
+        id: id,
+        assetIDs: [representativeAssetID],
+        representativeAssetID: representativeAssetID,
+        isCollapsed: collapsed == 1,
+        createdAt: optionalDate(statement, column: 3) ?? .distantPast,
+        updatedAt: optionalDate(statement, column: 4) ?? .distantPast
+      )
+    else {
+      throw CatalogStoreError.decoding(operation: operation, message: "The stored stack is invalid.")
+    }
+    return stack
+  }
+
   private func decodeMetadataPreset(
     _ statement: OpaquePointer,
     operation: String
@@ -1470,11 +1935,17 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, JobEngine {
   {
     let shouldUseFTS = ftsAvailabilityOverride ?? (sqlite3_compileoption_used("ENABLE_FTS5") != 0)
     if version == schemaVersion {
-      return try validateVersionTwoSchema(database, shouldUseFTS: shouldUseFTS)
+      return try validateVersionThreeSchema(database, shouldUseFTS: shouldUseFTS)
     }
     if version == 1 {
       let ftsAvailable = try validateVersionOneSchema(database, shouldUseFTS: shouldUseFTS)
       try migrateToVersionTwo(database)
+      try migrateToVersionThree(database)
+      return ftsAvailable
+    }
+    if version == 2 {
+      let ftsAvailable = try validateVersionTwoSchema(database, shouldUseFTS: shouldUseFTS)
+      try migrateToVersionThree(database)
       return ftsAvailable
     }
 
@@ -1559,6 +2030,7 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, JobEngine {
       throw primaryError
     }
     try migrateToVersionTwo(database)
+    try migrateToVersionThree(database)
     return ftsAvailable
   }
 
@@ -1597,6 +2069,64 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, JobEngine {
       } catch let rollbackError {
         throw CatalogStoreError.cleanup(
           operation: "catalog.migrate.v2",
+          primaryError: String(describing: primaryError),
+          cleanupError: String(describing: rollbackError)
+        )
+      }
+      throw primaryError
+    }
+  }
+
+  private static func migrateToVersionThree(_ database: OpaquePointer) throws {
+    try execute("BEGIN IMMEDIATE;", database: database, operation: "catalog.migrate.v3.begin")
+    do {
+      try execute(
+        """
+        CREATE TABLE collections (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('regular', 'smart')),
+          created_ms INTEGER NOT NULL,
+          updated_ms INTEGER NOT NULL,
+          predicate_json BLOB
+        );
+        CREATE UNIQUE INDEX collections_name_index
+          ON collections(name COLLATE NOCASE);
+        CREATE TABLE collection_assets (
+          collection_id TEXT NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+          asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+          position INTEGER NOT NULL CHECK (position >= 0),
+          PRIMARY KEY (collection_id, asset_id)
+        );
+        CREATE INDEX collection_assets_order_index
+          ON collection_assets(collection_id, position);
+        CREATE TABLE photo_stacks (
+          id TEXT PRIMARY KEY,
+          representative_asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+          is_collapsed INTEGER NOT NULL CHECK (is_collapsed IN (0, 1)),
+          created_ms INTEGER NOT NULL,
+          updated_ms INTEGER NOT NULL
+        );
+        CREATE TABLE stack_assets (
+          stack_id TEXT NOT NULL REFERENCES photo_stacks(id) ON DELETE CASCADE,
+          asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+          position INTEGER NOT NULL CHECK (position >= 0),
+          PRIMARY KEY (stack_id, asset_id)
+        );
+        CREATE INDEX stack_assets_order_index
+          ON stack_assets(stack_id, position);
+        PRAGMA user_version=3;
+        """,
+        database: database,
+        operation: "catalog.migrate.v3"
+      )
+      try execute("COMMIT;", database: database, operation: "catalog.migrate.v3.commit")
+    } catch let primaryError {
+      do {
+        try execute("ROLLBACK;", database: database, operation: "catalog.migrate.v3.rollback")
+      } catch let rollbackError {
+        throw CatalogStoreError.cleanup(
+          operation: "catalog.migrate.v3",
           primaryError: String(describing: primaryError),
           cleanupError: String(describing: rollbackError)
         )
@@ -1736,6 +2266,116 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, JobEngine {
       try validateQuery(database, sql: query)
     }
     return shouldUseFTS
+  }
+
+  private static func validateVersionThreeSchema(
+    _ database: OpaquePointer,
+    shouldUseFTS: Bool
+  ) throws -> Bool {
+    let ftsAvailable = try validateVersionTwoSchema(database, shouldUseFTS: shouldUseFTS)
+    let requiredColumns: [String: [SQLiteSchemaColumn]] = [
+      "collections": [
+        .init(position: 0, name: "id", type: "TEXT", isNotNull: false, defaultValue: nil, primaryKeyPosition: 1),
+        .init(position: 1, name: "name", type: "TEXT", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
+        .init(position: 2, name: "kind", type: "TEXT", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
+        .init(position: 3, name: "created_ms", type: "INTEGER", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
+        .init(position: 4, name: "updated_ms", type: "INTEGER", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
+        .init(position: 5, name: "predicate_json", type: "BLOB", isNotNull: false, defaultValue: nil, primaryKeyPosition: 0),
+      ],
+      "collection_assets": [
+        .init(position: 0, name: "collection_id", type: "TEXT", isNotNull: true, defaultValue: nil, primaryKeyPosition: 1),
+        .init(position: 1, name: "asset_id", type: "TEXT", isNotNull: true, defaultValue: nil, primaryKeyPosition: 2),
+        .init(position: 2, name: "position", type: "INTEGER", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
+      ],
+      "photo_stacks": [
+        .init(position: 0, name: "id", type: "TEXT", isNotNull: false, defaultValue: nil, primaryKeyPosition: 1),
+        .init(position: 1, name: "representative_asset_id", type: "TEXT", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
+        .init(position: 2, name: "is_collapsed", type: "INTEGER", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
+        .init(position: 3, name: "created_ms", type: "INTEGER", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
+        .init(position: 4, name: "updated_ms", type: "INTEGER", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
+      ],
+      "stack_assets": [
+        .init(position: 0, name: "stack_id", type: "TEXT", isNotNull: true, defaultValue: nil, primaryKeyPosition: 1),
+        .init(position: 1, name: "asset_id", type: "TEXT", isNotNull: true, defaultValue: nil, primaryKeyPosition: 2),
+        .init(position: 2, name: "position", type: "INTEGER", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
+      ],
+    ]
+    for (table, expected) in requiredColumns {
+      guard try tableExists(database, name: table) else {
+        throw schemaError("The required table '\(table)' is missing.")
+      }
+      guard try tableColumns(database, table: table) == expected else {
+        throw schemaError("The table '\(table)' does not have the exact version-3 columns.")
+      }
+    }
+    let tableSQL: [String: String] = [
+      "collections": """
+        CREATE TABLE collections (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('regular', 'smart')),
+          created_ms INTEGER NOT NULL,
+          updated_ms INTEGER NOT NULL,
+          predicate_json BLOB
+        )
+        """,
+      "collection_assets": """
+        CREATE TABLE collection_assets (
+          collection_id TEXT NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+          asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+          position INTEGER NOT NULL CHECK (position >= 0),
+          PRIMARY KEY (collection_id, asset_id)
+        )
+        """,
+      "photo_stacks": """
+        CREATE TABLE photo_stacks (
+          id TEXT PRIMARY KEY,
+          representative_asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+          is_collapsed INTEGER NOT NULL CHECK (is_collapsed IN (0, 1)),
+          created_ms INTEGER NOT NULL,
+          updated_ms INTEGER NOT NULL
+        )
+        """,
+      "stack_assets": """
+        CREATE TABLE stack_assets (
+          stack_id TEXT NOT NULL REFERENCES photo_stacks(id) ON DELETE CASCADE,
+          asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+          position INTEGER NOT NULL CHECK (position >= 0),
+          PRIMARY KEY (stack_id, asset_id)
+        )
+        """,
+    ]
+    for (table, expectedSQL) in tableSQL {
+      try validateSchemaSQL(database, object: table, type: "table", expectedSQL: expectedSQL)
+    }
+    let indexes: [String: String] = [
+      "collections_name_index": "CREATE UNIQUE INDEX collections_name_index ON collections(name COLLATE NOCASE)",
+      "collection_assets_order_index": "CREATE INDEX collection_assets_order_index ON collection_assets(collection_id, position)",
+      "stack_assets_order_index": "CREATE INDEX stack_assets_order_index ON stack_assets(stack_id, position)",
+    ]
+    for (index, expectedSQL) in indexes {
+      try validateSchemaSQL(database, object: index, type: "index", expectedSQL: expectedSQL)
+    }
+    try validateForeignKey(
+      database, table: "collection_assets", column: "collection_id", referencedTable: "collections")
+    try validateForeignKey(
+      database, table: "collection_assets", column: "asset_id", referencedTable: "assets")
+    try validateForeignKey(
+      database, table: "photo_stacks", column: "representative_asset_id", referencedTable: "assets")
+    try validateForeignKey(
+      database, table: "stack_assets", column: "stack_id", referencedTable: "photo_stacks")
+    try validateForeignKey(
+      database, table: "stack_assets", column: "asset_id", referencedTable: "assets")
+    let queries = [
+      "SELECT id, name, kind, created_ms, updated_ms, predicate_json FROM collections WHERE id = ?;",
+      "SELECT asset_id FROM collection_assets WHERE collection_id = ? ORDER BY position ASC;",
+      "SELECT id, representative_asset_id, is_collapsed, created_ms, updated_ms FROM photo_stacks WHERE id = ?;",
+      "SELECT asset_id FROM stack_assets WHERE stack_id = ? ORDER BY position ASC;",
+    ]
+    for query in queries {
+      try validateQuery(database, sql: query)
+    }
+    return ftsAvailable
   }
 
   private static func withStaticStatement<T>(
