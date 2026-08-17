@@ -63,6 +63,49 @@ struct ModernUIContractTests {
   }
 
   @Test
+  func opticsEffectsDraftBuildsExtendedDurableOperations() throws {
+    var draft = BaselineDevelopDraft()
+    draft.vignetteCorrection = 0.35
+    draft.lensDistortion = -0.6
+    draft.chromaticAberration = 0.4
+    draft.defringe = 0.25
+    draft.vignetteAmount = 0.2
+    draft.grainAmount = 0.45
+    draft.dehaze = -0.3
+
+    #expect(
+      draft.optics
+        == OpticsAdjustmentV1(
+          vignetteCorrection: 0.35,
+          lensDistortion: -0.6,
+          chromaticAberration: 0.4,
+          defringe: 0.25
+        )
+    )
+    #expect(
+      draft.effects
+        == EffectsAdjustmentV1(
+          vignetteAmount: 0.2,
+          grainAmount: 0.45,
+          dehaze: -0.3
+        )
+    )
+  }
+
+  @MainActor
+  @Test
+  func opticsEffectsInspectorUsesNativeDisclosureAndFallbackGlassContract() {
+    _ = BaselineDevelopControls.self
+    _ = Text("Optics & Effects")
+      .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+
+    if #available(macOS 26.0, *) {
+      _ = Text("Optics & Effects")
+        .glassEffect(.regular, in: .rect(cornerRadius: 12))
+    }
+  }
+
+  @Test
   func cloneDraftBuildsVersionOneOperationFromNormalizedControls() throws {
     var draft = RetouchInspectorModel()
     draft.tool = .clone

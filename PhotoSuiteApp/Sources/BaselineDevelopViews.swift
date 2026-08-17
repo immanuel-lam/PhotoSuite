@@ -128,12 +128,42 @@ struct BaselineDevelopControls: View {
             commit: commitOptics
           )
           DevelopSlider(
+            title: "Lens distortion",
+            value: $draft.lensDistortion,
+            range: -1...1,
+            commit: commitOptics
+          )
+          DevelopSlider(
+            title: "Chromatic aberration",
+            value: $draft.chromaticAberration,
+            range: 0...1,
+            commit: commitOptics
+          )
+          DevelopSlider(
+            title: "Defringe",
+            value: $draft.defringe,
+            range: 0...1,
+            commit: commitOptics
+          )
+          DevelopSlider(
             title: "Creative vignette",
             value: $draft.vignetteAmount,
             range: 0...1,
             commit: commitEffects
           )
-          Text("Lens profiles are not bundled in this pre-alpha build.")
+          DevelopSlider(
+            title: "Grain",
+            value: $draft.grainAmount,
+            range: 0...1,
+            commit: commitEffects
+          )
+          DevelopSlider(
+            title: "Dehaze",
+            value: $draft.dehaze,
+            range: -1...1,
+            commit: commitEffects
+          )
+          Text("Deterministic correction controls; camera lens profiles are not bundled.")
             .font(.caption)
             .foregroundStyle(.secondary)
         }
@@ -328,7 +358,7 @@ private struct ToneCurveGraph: View {
   }
 }
 
-private struct BaselineDevelopDraft: Equatable {
+struct BaselineDevelopDraft: Equatable {
   var blackPoint = 0.0
   var curveShadows = 0.25
   var curveMidtones = 0.5
@@ -342,7 +372,12 @@ private struct BaselineDevelopDraft: Equatable {
   var sharpening = 0.0
   var noiseReduction = 0.0
   var vignetteCorrection = 0.0
+  var lensDistortion = 0.0
+  var chromaticAberration = 0.0
+  var defringe = 0.0
   var vignetteAmount = 0.0
+  var grainAmount = 0.0
+  var dehaze = 0.0
   var redGain = 0.0
   var greenGain = 0.0
   var blueGain = 0.0
@@ -374,8 +409,15 @@ private struct BaselineDevelopDraft: Equatable {
       case .detail(let adjustment):
         sharpening = adjustment.sharpening
         noiseReduction = adjustment.luminanceNoiseReduction
-      case .optics(let adjustment): vignetteCorrection = adjustment.vignetteCorrection
-      case .effects(let adjustment): vignetteAmount = adjustment.vignetteAmount
+      case .optics(let adjustment):
+        vignetteCorrection = adjustment.vignetteCorrection
+        lensDistortion = adjustment.lensDistortion
+        chromaticAberration = adjustment.chromaticAberration
+        defringe = adjustment.defringe
+      case .effects(let adjustment):
+        vignetteAmount = adjustment.vignetteAmount
+        grainAmount = adjustment.grainAmount
+        dehaze = adjustment.dehaze
       case .calibration(let adjustment):
         redGain = adjustment.redGain
         greenGain = adjustment.greenGain
@@ -420,9 +462,22 @@ private struct BaselineDevelopDraft: Equatable {
     )!
   }
 
-  var optics: OpticsAdjustmentV1 { OpticsAdjustmentV1(vignetteCorrection: vignetteCorrection)! }
+  var optics: OpticsAdjustmentV1 {
+    OpticsAdjustmentV1(
+      vignetteCorrection: vignetteCorrection,
+      lensDistortion: lensDistortion,
+      chromaticAberration: chromaticAberration,
+      defringe: defringe
+    )!
+  }
 
-  var effects: EffectsAdjustmentV1 { EffectsAdjustmentV1(vignetteAmount: vignetteAmount)! }
+  var effects: EffectsAdjustmentV1 {
+    EffectsAdjustmentV1(
+      vignetteAmount: vignetteAmount,
+      grainAmount: grainAmount,
+      dehaze: dehaze
+    )!
+  }
 
   var calibration: CalibrationAdjustmentV1 {
     CalibrationAdjustmentV1(redGain: redGain, greenGain: greenGain, blueGain: blueGain)!

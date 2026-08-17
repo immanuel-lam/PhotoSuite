@@ -93,6 +93,75 @@ final class DevelopAdjustmentTests: XCTestCase {
     )
   }
 
+  func testOpticsAndEffectsExtendedFieldsValidateAndRoundTripWithoutChangingLegacyPayloads() throws
+  {
+    let optics = try XCTUnwrap(
+      OpticsAdjustmentV1(
+        vignetteCorrection: 0.35,
+        lensDistortion: -0.6,
+        chromaticAberration: 0.4,
+        defringe: 0.25
+      )
+    )
+    let effects = try XCTUnwrap(
+      EffectsAdjustmentV1(
+        vignetteAmount: 0.2,
+        grainAmount: 0.45,
+        dehaze: -0.3
+      )
+    )
+    let data = try JSONEncoder().encode([EditOperation.optics(optics), .effects(effects)])
+    let decoded = try JSONDecoder().decode([EditOperation].self, from: data)
+
+    XCTAssertEqual(decoded, [.optics(optics), .effects(effects)])
+    XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("lensDistortion"))
+    XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("chromaticAberration"))
+    XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("defringe"))
+    XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("grainAmount"))
+    XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("dehaze"))
+
+    XCTAssertNil(
+      OpticsAdjustmentV1(
+        vignetteCorrection: 0,
+        lensDistortion: -1.01,
+        chromaticAberration: 0,
+        defringe: 0
+      )
+    )
+    XCTAssertNil(
+      OpticsAdjustmentV1(
+        vignetteCorrection: 0,
+        lensDistortion: 0,
+        chromaticAberration: 1.01,
+        defringe: 0
+      )
+    )
+    XCTAssertNil(
+      EffectsAdjustmentV1(vignetteAmount: 0, grainAmount: 1.01, dehaze: 0)
+    )
+    XCTAssertNil(
+      EffectsAdjustmentV1(vignetteAmount: 0, grainAmount: 0, dehaze: -1.01)
+    )
+  }
+
+  func testLegacyOpticsAndEffectsPayloadsDecodeWithNeutralExtendedFields() throws {
+    let data = Data(
+      #"[{"kind":"optics","adjustment":{"schemaVersion":1,"vignetteCorrection":0.4}},{"kind":"effects","adjustment":{"schemaVersion":1,"vignetteAmount":0.3}}]"#
+        .utf8
+    )
+
+    let decoded = try JSONDecoder().decode([EditOperation].self, from: data)
+    guard case .optics(let optics) = decoded[0], case .effects(let effects) = decoded[1] else {
+      XCTFail("Legacy payloads must remain typed optics and effects operations.")
+      return
+    }
+    XCTAssertEqual(optics.lensDistortion, 0)
+    XCTAssertEqual(optics.chromaticAberration, 0)
+    XCTAssertEqual(optics.defringe, 0)
+    XCTAssertEqual(effects.grainAmount, 0)
+    XCTAssertEqual(effects.dehaze, 0)
+  }
+
   func testKnownDevelopOperationWithFuturePayloadSchemaIsPreservedAsUnknown() throws {
     let future = Data(
       #"{"kind":"toneCurve","adjustment":{"schemaVersion":2,"algorithm":"adaptive","points":[0,0.5,1]}}"#

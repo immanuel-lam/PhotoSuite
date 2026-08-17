@@ -446,6 +446,51 @@ final class PhotoWorkspaceTests: XCTestCase {
     XCTAssertEqual(reopened.currentRecipe?.operations, expected)
   }
 
+  func testExtendedOpticsAndEffectsCommitAndPreserveUnknownOperations() async throws {
+    let asset = makeAsset(name: "extended-optics-effects.jpg")
+    let future = EditOperation.unknown(
+      "futureLensProfile",
+      payload: ["algorithm": .string("v2"), "amount": .number(0.4)]
+    )
+    let initial = makeRecipe(assetID: asset.id)
+    let catalog = CatalogSpy(assets: [asset], recipes: [asset.id: initial])
+    let workspace = makeWorkspace(catalog: catalog)
+    let optics = try XCTUnwrap(
+      OpticsAdjustmentV1(
+        vignetteCorrection: 0.15,
+        lensDistortion: -0.45,
+        chromaticAberration: 0.35,
+        defringe: 0.2
+      )
+    )
+    let effects = try XCTUnwrap(
+      EffectsAdjustmentV1(vignetteAmount: 0.1, grainAmount: 0.3, dehaze: 0.4)
+    )
+
+    await workspace.reopen()
+    await workspace.commitDevelopOperation(.effects(effects))
+    await workspace.commitDevelopOperation(.optics(optics))
+
+    let expected: [EditOperation] = [.optics(optics), .effects(effects)]
+    XCTAssertEqual(workspace.currentRecipe?.revision, 2)
+    XCTAssertEqual(workspace.currentRecipe?.operations, expected)
+
+    let reopened = makeWorkspace(catalog: catalog)
+    await reopened.reopen()
+    XCTAssertEqual(reopened.currentRecipe?.operations, expected)
+    XCTAssertEqual(reopened.currentRecipe?.revision, 2)
+
+    let futureAsset = makeAsset(name: "future-optics-effects.jpg")
+    let futureRecipe = makeRecipe(assetID: futureAsset.id, operations: [future])
+    let futureCatalog = CatalogSpy(assets: [futureAsset], recipes: [futureAsset.id: futureRecipe])
+    let futureWorkspace = makeWorkspace(catalog: futureCatalog)
+    await futureWorkspace.reopen()
+    await futureWorkspace.commitDevelopOperation(.optics(optics))
+    XCTAssertEqual(futureWorkspace.currentRecipe?.operations, [future])
+    XCTAssertEqual(futureWorkspace.currentRecipe?.revision, futureRecipe.revision)
+    XCTAssertEqual(futureWorkspace.lastError, .unknownOperationsBlockEditing)
+  }
+
   func testRetouchDevelopOperationsCommitInCanonicalOrderAndSurviveReopen() async throws {
     let asset = makeAsset(name: "retouch-families.jpg")
     let initial = makeRecipe(assetID: asset.id)

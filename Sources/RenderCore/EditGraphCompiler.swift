@@ -52,9 +52,60 @@ enum RecipeRenderContractV1 {
   static func calibrationFactor(for gain: Double) -> Double {
     1 + gain * 0.5
   }
+
+  static func lensDistortionScale(for value: Double) -> Double {
+    value * 0.35
+  }
+
+  static func chromaticAberrationOffset(for value: Double, longestEdge: Double) -> Double {
+    max(0, longestEdge) * value * 0.02
+  }
+
+  static func defringeStrength(for value: Double) -> Double {
+    value * 0.65
+  }
+
+  static func grainAmplitude(for value: Double) -> Double {
+    value * 0.08
+  }
+
+  static func dehazeContrastFactor(for delta: Double) -> Double {
+    pow(4, delta * 0.5)
+  }
+
+  static func dehazeSaturationFactor(for delta: Double) -> Double {
+    1 + delta * 0.25
+  }
 }
 
 enum EditGraphCompiler {
+  private static let defringeKernel = CIColorKernel(
+    source: """
+      kernel vec4 applyDefringe(sampler image, float strength) {
+        vec4 pixel = sample(image, samplerCoord(image));
+        float maximum = max(pixel.r, max(pixel.g, pixel.b));
+        float minimum = min(pixel.r, min(pixel.g, pixel.b));
+        float chroma = maximum - minimum;
+        float correction = clamp(chroma * strength * 3.0, 0.0, 1.0);
+        float luminance = dot(pixel.rgb, vec3(0.299, 0.587, 0.114));
+        pixel.rgb = mix(pixel.rgb, vec3(luminance), correction);
+        return pixel;
+      }
+      """
+  )
+
+  private static let grainKernel = CIColorKernel(
+    source: """
+      kernel vec4 applyGrain(sampler image, float amplitude) {
+        vec4 pixel = sample(image, samplerCoord(image));
+        float signal = sin(dot(destCoord(), vec2(12.9898, 78.233)));
+        float noise = signal * amplitude;
+        pixel.rgb = clamp(pixel.rgb + vec3(noise), 0.0, 1.0);
+        return pixel;
+      }
+      """
+  )
+
   static func compile(_ input: CIImage, recipe: EditRecipe) throws -> CIImage {
     guard recipe.pins.renderSchemaVersion == RecipeRenderContractV1.schemaVersion else {
       throw RenderCoreError.unsupportedRenderSchemaVersion(
@@ -178,20 +229,10 @@ enum EditGraphCompiler {
         image = try detailImage(image, adjustment: adjustment, index: index)
 
       case .optics(let adjustment):
-        image = try vignetteImage(
-          image,
-          intensity: -adjustment.vignetteCorrection,
-          index: index,
-          operation: "optics"
-        )
+        image = try opticsImage(image, adjustment: adjustment, index: index)
 
       case .effects(let adjustment):
-        image = try vignetteImage(
-          image,
-          intensity: adjustment.vignetteAmount,
-          index: index,
-          operation: "effects"
-        )
+        image = try effectsImage(image, adjustment: adjustment, index: index)
 
       case .calibration(let adjustment):
         image = try calibrationImage(image, adjustment: adjustment, index: index)
@@ -345,6 +386,111 @@ enum EditGraphCompiler {
     filter.intensity = Float(intensity)
     filter.radius = 1
     return try output(of: filter, index: index, operation: operation)
+  }
+
+  private static func opticsImage(
+    _ image: CIImage,
+    adjustment: OpticsAdjustmentV1,
+    index: Int
+  ) throws -> CIImage {
+    var adjusted = try vignetteImage(
+      image,
+      intensity: -adjustment.vignetteCorrection,
+      index: index,
+      operation: "optics"
+    )
+
+    if adjustment.lensDistortion != 0 {
+      let extent = adjusted.extent
+      let filter = CIFilter.bumpDistortion()
+      filter.inputImage = adjusted
+      filter.center = CGPoint(x: extent.midX, y: extent.midY)
+      filter.radius = Float(max(extent.width, extent.height) * 0.72)
+      filter.scale = Float(
+        RecipeRenderContractV1.lensDistortionScale(for: adjustment.lensDistortion))
+      adjusted = try output(of: filter, index: index, operation: "lensDistortion")
+        .cropped(to: extent)
+    }
+
+    if adjustment.chromaticAberration != 0 {
+      let offset = RecipeRenderContractV1.chromaticAberrationOffset(
+        for: adjustment.chromaticAberration,
+        longestEdge: max(adjusted.extent.width, adjusted.extent.height)
+      )
+      // Core Image's public macOS 15 filter set has no channel-offset lens
+      // profile primitive. Keep this correction deterministic and bounded by
+      // applying a paired red/blue gain derived from the same pixel-scale
+      // offset; a future profile adapter can replace this mapping without
+      // changing the durable recipe contract.
+      let filter = CIFilter.colorMatrix()
+      filter.inputImage = adjusted
+      let channelGain = CGFloat(
+        min(0.2, offset / max(1, max(adjusted.extent.width, adjusted.extent.height)))
+      )
+      filter.rVector = CIVector(x: 1 + channelGain, y: 0, z: 0, w: 0)
+      filter.gVector = CIVector(x: 0, y: 1, z: 0, w: 0)
+      filter.bVector = CIVector(x: 0, y: 0, z: 1 - channelGain, w: 0)
+      filter.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
+      filter.biasVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+      adjusted = try output(of: filter, index: index, operation: "chromaticAberration")
+    }
+
+    if adjustment.defringe != 0 {
+      guard let kernel = defringeKernel else {
+        throw invalid(index, "defringe")
+      }
+      guard
+        let output = kernel.apply(
+          extent: adjusted.extent,
+          arguments: [
+            adjusted,
+            RecipeRenderContractV1.defringeStrength(for: adjustment.defringe),
+          ]
+        )
+      else { throw invalid(index, "defringe") }
+      adjusted = output.cropped(to: adjusted.extent)
+    }
+    return adjusted
+  }
+
+  private static func effectsImage(
+    _ image: CIImage,
+    adjustment: EffectsAdjustmentV1,
+    index: Int
+  ) throws -> CIImage {
+    var adjusted = try vignetteImage(
+      image,
+      intensity: adjustment.vignetteAmount,
+      index: index,
+      operation: "effects"
+    )
+
+    if adjustment.dehaze != 0 {
+      let filter = CIFilter.colorControls()
+      filter.inputImage = adjusted
+      filter.contrast = Float(RecipeRenderContractV1.dehazeContrastFactor(for: adjustment.dehaze))
+      filter.saturation = Float(
+        RecipeRenderContractV1.dehazeSaturationFactor(for: adjustment.dehaze))
+      filter.brightness = 0
+      adjusted = try output(of: filter, index: index, operation: "dehaze")
+    }
+
+    if adjustment.grainAmount != 0 {
+      guard let kernel = grainKernel else {
+        throw invalid(index, "grain")
+      }
+      guard
+        let output = kernel.apply(
+          extent: adjusted.extent,
+          arguments: [
+            adjusted,
+            RecipeRenderContractV1.grainAmplitude(for: adjustment.grainAmount),
+          ]
+        )
+      else { throw invalid(index, "grain") }
+      adjusted = output.cropped(to: adjusted.extent)
+    }
+    return adjusted
   }
 
   private static func calibrationImage(

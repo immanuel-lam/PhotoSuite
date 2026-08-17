@@ -131,40 +131,119 @@ public struct DetailAdjustmentV1: Codable, Hashable, Sendable {
 public struct OpticsAdjustmentV1: Codable, Hashable, Sendable {
   public let schemaVersion: UInt
   public let vignetteCorrection: Double
+  /// Bounded barrel or pincushion correction. Negative values contract the
+  /// image and positive values expand it in the deterministic render graph.
+  public let lensDistortion: Double
+  /// A bounded chromatic-channel separation correction amount.
+  public let chromaticAberration: Double
+  /// A bounded colour-fringe suppression amount.
+  public let defringe: Double
 
-  public init?(vignetteCorrection: Double) {
-    guard DevelopAdjustmentValidation.isUnit(vignetteCorrection) else { return nil }
+  public init?(
+    vignetteCorrection: Double,
+    lensDistortion: Double = 0,
+    chromaticAberration: Double = 0,
+    defringe: Double = 0
+  ) {
+    guard
+      DevelopAdjustmentValidation.isUnit(vignetteCorrection),
+      DevelopAdjustmentValidation.isNormalized(lensDistortion),
+      DevelopAdjustmentValidation.isUnit(chromaticAberration),
+      DevelopAdjustmentValidation.isUnit(defringe)
+    else { return nil }
     schemaVersion = 1
     self.vignetteCorrection = vignetteCorrection
+    self.lensDistortion = lensDistortion
+    self.chromaticAberration = chromaticAberration
+    self.defringe = defringe
   }
 
   public init(from decoder: any Decoder) throws {
     let values = try PersistedOptics(from: decoder)
     guard
       values.schemaVersion == 1,
-      let validated = Self(vignetteCorrection: values.vignetteCorrection)
+      let validated = Self(
+        vignetteCorrection: values.vignetteCorrection,
+        lensDistortion: values.lensDistortion ?? 0,
+        chromaticAberration: values.chromaticAberration ?? 0,
+        defringe: values.defringe ?? 0
+      )
     else { throw DevelopAdjustmentValidation.corrupt(decoder, "Invalid optics adjustment") }
     self = validated
+  }
+
+  public func encode(to encoder: any Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(schemaVersion, forKey: .schemaVersion)
+    try container.encode(vignetteCorrection, forKey: .vignetteCorrection)
+    // Omit neutral extensions so recipes written by the original version keep
+    // their byte-stable payload while newer values remain durable.
+    if lensDistortion != 0 { try container.encode(lensDistortion, forKey: .lensDistortion) }
+    if chromaticAberration != 0 {
+      try container.encode(chromaticAberration, forKey: .chromaticAberration)
+    }
+    if defringe != 0 { try container.encode(defringe, forKey: .defringe) }
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case schemaVersion
+    case vignetteCorrection
+    case lensDistortion
+    case chromaticAberration
+    case defringe
   }
 }
 
 public struct EffectsAdjustmentV1: Codable, Hashable, Sendable {
   public let schemaVersion: UInt
   public let vignetteAmount: Double
+  /// A deterministic fine-grain amount in the range 0...1.
+  public let grainAmount: Double
+  /// A bounded local-contrast/dehaze amount in the range -1...1.
+  public let dehaze: Double
 
-  public init?(vignetteAmount: Double) {
-    guard DevelopAdjustmentValidation.isUnit(vignetteAmount) else { return nil }
+  public init?(
+    vignetteAmount: Double,
+    grainAmount: Double = 0,
+    dehaze: Double = 0
+  ) {
+    guard
+      DevelopAdjustmentValidation.isUnit(vignetteAmount),
+      DevelopAdjustmentValidation.isUnit(grainAmount),
+      DevelopAdjustmentValidation.isNormalized(dehaze)
+    else { return nil }
     schemaVersion = 1
     self.vignetteAmount = vignetteAmount
+    self.grainAmount = grainAmount
+    self.dehaze = dehaze
   }
 
   public init(from decoder: any Decoder) throws {
     let values = try PersistedEffects(from: decoder)
     guard
       values.schemaVersion == 1,
-      let validated = Self(vignetteAmount: values.vignetteAmount)
+      let validated = Self(
+        vignetteAmount: values.vignetteAmount,
+        grainAmount: values.grainAmount ?? 0,
+        dehaze: values.dehaze ?? 0
+      )
     else { throw DevelopAdjustmentValidation.corrupt(decoder, "Invalid effects adjustment") }
     self = validated
+  }
+
+  public func encode(to encoder: any Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(schemaVersion, forKey: .schemaVersion)
+    try container.encode(vignetteAmount, forKey: .vignetteAmount)
+    if grainAmount != 0 { try container.encode(grainAmount, forKey: .grainAmount) }
+    if dehaze != 0 { try container.encode(dehaze, forKey: .dehaze) }
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case schemaVersion
+    case vignetteAmount
+    case grainAmount
+    case dehaze
   }
 }
 
@@ -305,11 +384,16 @@ private struct PersistedDetail: Decodable {
 private struct PersistedOptics: Decodable {
   let schemaVersion: UInt
   let vignetteCorrection: Double
+  let lensDistortion: Double?
+  let chromaticAberration: Double?
+  let defringe: Double?
 }
 
 private struct PersistedEffects: Decodable {
   let schemaVersion: UInt
   let vignetteAmount: Double
+  let grainAmount: Double?
+  let dehaze: Double?
 }
 
 private struct PersistedCalibration: Decodable {

@@ -29,6 +29,30 @@ final class DevelopRenderTests: XCTestCase {
     XCTAssertEqual(RecipeRenderContractV1.calibrationFactor(for: 1), 1.5)
   }
 
+  func testOpticsAndEffectsMappingsPinSafeBoundedEndpoints() {
+    XCTAssertEqual(RecipeRenderContractV1.lensDistortionScale(for: -1), -0.35)
+    XCTAssertEqual(RecipeRenderContractV1.lensDistortionScale(for: 1), 0.35)
+    XCTAssertEqual(
+      RecipeRenderContractV1.chromaticAberrationOffset(for: 1, longestEdge: 1_000),
+      20,
+      accuracy: 0.000_001
+    )
+    XCTAssertEqual(RecipeRenderContractV1.defringeStrength(for: 1), 0.65)
+    XCTAssertEqual(RecipeRenderContractV1.grainAmplitude(for: 1), 0.08)
+    XCTAssertEqual(
+      RecipeRenderContractV1.dehazeContrastFactor(for: -1),
+      0.5,
+      accuracy: 0.000_001
+    )
+    XCTAssertEqual(
+      RecipeRenderContractV1.dehazeContrastFactor(for: 1),
+      2,
+      accuracy: 0.000_001
+    )
+    XCTAssertEqual(RecipeRenderContractV1.dehazeSaturationFactor(for: -1), 0.75)
+    XCTAssertEqual(RecipeRenderContractV1.dehazeSaturationFactor(for: 1), 1.25)
+  }
+
   func testToneCurveIdentityPreservesPixelsAndAdjustedCurveChangesPixels() async throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
@@ -153,6 +177,56 @@ final class DevelopRenderTests: XCTestCase {
     XCTAssertNotEqual(try pixels(corrected), try pixels(baseline))
     XCTAssertGreaterThanOrEqual(correctedCorner.red, baselineCorner.red)
     XCTAssertLessThan(vignettedCorner.red, baselineCorner.red)
+  }
+
+  func testExtendedOpticsAndEffectsProduceDeterministicPixelChanges() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let baseline = try await render(fixture.source)
+    let distortion = try XCTUnwrap(
+      OpticsAdjustmentV1(
+        vignetteCorrection: 0,
+        lensDistortion: 0.8,
+        chromaticAberration: 0,
+        defringe: 0
+      )
+    )
+    let aberration = try XCTUnwrap(
+      OpticsAdjustmentV1(
+        vignetteCorrection: 0,
+        lensDistortion: 0,
+        chromaticAberration: 0.8,
+        defringe: 0
+      )
+    )
+    let defringe = try XCTUnwrap(
+      OpticsAdjustmentV1(
+        vignetteCorrection: 0,
+        lensDistortion: 0,
+        chromaticAberration: 0,
+        defringe: 0.8
+      )
+    )
+    let grain = try XCTUnwrap(
+      EffectsAdjustmentV1(vignetteAmount: 0, grainAmount: 0.8, dehaze: 0)
+    )
+    let dehaze = try XCTUnwrap(
+      EffectsAdjustmentV1(vignetteAmount: 0, grainAmount: 0, dehaze: 0.8)
+    )
+
+    let distorted = try await render(fixture.source, operations: [.optics(distortion)])
+    let aberrated = try await render(fixture.source, operations: [.optics(aberration)])
+    let defringed = try await render(fixture.source, operations: [.optics(defringe)])
+    let grained = try await render(fixture.source, operations: [.effects(grain)])
+    let dehazed = try await render(fixture.source, operations: [.effects(dehaze)])
+    let grainedAgain = try await render(fixture.source, operations: [.effects(grain)])
+
+    XCTAssertNotEqual(try pixels(distorted), try pixels(baseline))
+    XCTAssertNotEqual(try pixels(aberrated), try pixels(baseline))
+    XCTAssertNotEqual(try pixels(defringed), try pixels(baseline))
+    XCTAssertNotEqual(try pixels(grained), try pixels(baseline))
+    XCTAssertNotEqual(try pixels(dehazed), try pixels(baseline))
+    XCTAssertEqual(try pixels(grained), try pixels(grainedAgain))
   }
 
   func testHDRIntentIsRecognizedAndPreservesCurrentExtendedRangeGraphPixels() async throws {
