@@ -1049,9 +1049,20 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
       nil
     )
     guard code == SQLITE_OK, let database else {
-      let error = sqliteError(operation: "catalog.open", database: database, code: code)
-      if let database { _ = sqlite3_close_v2(database) }
-      throw error
+      let primaryError = sqliteError(operation: "catalog.open", database: database, code: code)
+      if let database {
+        let closeCode = sqlite3_close_v2(database)
+        guard closeCode == SQLITE_OK else {
+          throw CatalogStoreError.cleanup(
+            operation: "catalog.open.close",
+            primaryError: primaryError.localizedDescription,
+            cleanupError: sqliteError(
+              operation: "catalog.open.close", database: database, code: closeCode
+            ).localizedDescription
+          )
+        }
+      }
+      throw primaryError
     }
     return database
   }
@@ -1385,25 +1396,22 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
   }
 
   private static func tableColumns(_ database: OpaquePointer, table: String) throws -> Set<String> {
-    var statement: OpaquePointer?
-    let code = sqlite3_prepare_v2(database, "PRAGMA table_info(\(table));", -1, &statement, nil)
-    guard code == SQLITE_OK, let statement else {
-      throw sqliteError(
-        operation: "catalog.validate.columns.prepare", database: database, code: code)
-    }
-    defer { _ = sqlite3_finalize(statement) }
-    var columns: Set<String> = []
-    while true {
-      let stepCode = sqlite3_step(statement)
-      if stepCode == SQLITE_DONE { return columns }
-      guard stepCode == SQLITE_ROW else {
-        throw sqliteError(
-          operation: "catalog.validate.columns.step", database: database, code: stepCode)
+    try withStaticStatement(
+      database, sql: "PRAGMA table_info(\(table));", operation: "catalog.validate.columns"
+    ) { statement in
+      var columns: Set<String> = []
+      while true {
+        let stepCode = sqlite3_step(statement)
+        if stepCode == SQLITE_DONE { return columns }
+        guard stepCode == SQLITE_ROW else {
+          throw sqliteError(
+            operation: "catalog.validate.columns.step", database: database, code: stepCode)
+        }
+        guard let name = sqlite3_column_text(statement, 1) else {
+          throw schemaError("A schema column name is NULL.")
+        }
+        columns.insert(String(cString: name))
       }
-      guard let name = sqlite3_column_text(statement, 1) else {
-        throw schemaError("A schema column name is NULL.")
-      }
-      columns.insert(String(cString: name))
     }
   }
 
@@ -1413,26 +1421,23 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
     column: String,
     referencedTable: String
   ) throws {
-    var statement: OpaquePointer?
-    let code = sqlite3_prepare_v2(
-      database, "PRAGMA foreign_key_list(\(table));", -1, &statement, nil)
-    guard code == SQLITE_OK, let statement else {
-      throw sqliteError(
-        operation: "catalog.validate.foreignKey.prepare", database: database, code: code)
-    }
-    defer { _ = sqlite3_finalize(statement) }
-    while true {
-      let stepCode = sqlite3_step(statement)
-      if stepCode == SQLITE_DONE { break }
-      guard stepCode == SQLITE_ROW else {
-        throw sqliteError(
-          operation: "catalog.validate.foreignKey.step", database: database, code: stepCode)
+    try withStaticStatement(
+      database, sql: "PRAGMA foreign_key_list(\(table));", operation: "catalog.validate.foreignKey"
+    ) { statement in
+      while true {
+        let stepCode = sqlite3_step(statement)
+        if stepCode == SQLITE_DONE { break }
+        guard stepCode == SQLITE_ROW else {
+          throw sqliteError(
+            operation: "catalog.validate.foreignKey.step", database: database, code: stepCode)
+        }
+        let target = sqlite3_column_text(statement, 2).map { String(cString: $0) }
+        let source = sqlite3_column_text(statement, 3).map { String(cString: $0) }
+        let deleteAction = sqlite3_column_text(statement, 6).map { String(cString: $0) }
+        if source == column && target == referencedTable && deleteAction == "CASCADE" { return }
       }
-      let target = sqlite3_column_text(statement, 2).map { String(cString: $0) }
-      let source = sqlite3_column_text(statement, 3).map { String(cString: $0) }
-      if source == column && target == referencedTable { return }
+      throw schemaError("The table '\(table)' does not have the required cascading foreign key.")
     }
-    throw schemaError("The table '\(table)' does not have the required foreign key.")
   }
 
   private static func validateQuery(_ database: OpaquePointer, sql: String) throws {
