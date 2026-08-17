@@ -49,3 +49,6 @@ Build Library, Develop, and Deliver workspaces with native menus, settings, impo
 
 Run Swift tests, Xcode build and tests, accessibility checks, source-integrity tests, visual inspection, and broad code review. Record the implemented subset and remaining parity rows without overstating delivery.
 
+### Task 8: Public GitHub pre-alpha publication
+
+Use the authenticated GitHub CLI account `immanuel-lam` to create a public `PhotoSuite` repository if it does not already exist. Push the verified `codex/photosuite-foundation` branch and publish an honest pre-alpha repository description. Do not create a stable release or claim Lightroom parity.
