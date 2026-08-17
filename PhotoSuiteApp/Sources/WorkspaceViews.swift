@@ -189,6 +189,7 @@ struct WorkspaceSidebar: View {
               .foregroundStyle(.secondary)
           }
           LibraryMetadataControls(workspace: workspace, asset: asset)
+          MetadataEditorView(workspace: workspace, asset: asset)
         }
         .padding(18)
       }

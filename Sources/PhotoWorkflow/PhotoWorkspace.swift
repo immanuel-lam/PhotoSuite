@@ -38,6 +38,8 @@ public final class PhotoWorkspace {
   public var professionalTool: ProfessionalTool = .map
   public var photoLocations: [PhotoLocation] = []
   public var isLoadingPhotoLocations = false
+  public var isProfessionalExporting = false
+  public var lastProfessionalOutput: URL?
 
   public var selectedAsset: PhotoAsset? {
     guard let selectedAssetID else { return nil }
@@ -242,15 +244,72 @@ public final class PhotoWorkspace {
     case .print:
       preview == nil ? .unavailable(.selectionRequired) : .available
     case .book:
-      preview == nil ? .unavailable(.selectionRequired) : .previewOnly(.bookExportUnavailable)
+      professionalOutputAssets.isEmpty
+        ? .unavailable(.selectionRequired) : .available
     case .slideshow:
-      preview == nil ? .unavailable(.selectionRequired) : .available
+      professionalOutputAssets.isEmpty
+        ? .unavailable(.selectionRequired) : .available
     case .webGallery:
-      preview == nil ? .unavailable(.selectionRequired) : .previewOnly(.webPublishingUnavailable)
+      professionalOutputAssets.isEmpty
+        ? .unavailable(.selectionRequired) : .available
     case .plugins:
       .unavailable(.pluginHostUnavailable)
     case .adobeMigration:
       .unavailable(.adobeCatalogParserUnavailable)
+    }
+  }
+
+  /// The current Library selection, or the active filtered set when it contains photographs.
+  /// Professional outputs use the latest durable recipe for every item and never mutate sources.
+  public var professionalOutputAssets: [PhotoAsset] {
+    let candidates = filteredAssets.filter { !$0.isMissing }
+    if !candidates.isEmpty { return candidates }
+    if let selectedAsset, !selectedAsset.isMissing { return [selectedAsset] }
+    return []
+  }
+
+  public func exportBook(to destinationURL: URL, title: String = "PhotoSuite Book") async {
+    await exportProfessionalOutput(operation: "book", assets: professionalOutputAssets) {
+      let photos = try await self.professionalOutputPhotos()
+      return try await PDFBookExporter(renderer: self.renderer).export(
+        PhotoBookExportRequest(
+          title: title,
+          pages: photos,
+          destinationURL: destinationURL
+        )
+      )
+    }
+  }
+
+  public func exportSlideshow(
+    to destinationURL: URL,
+    title: String = "PhotoSuite Slideshow"
+  ) async {
+    await exportProfessionalOutput(operation: "slideshow", assets: professionalOutputAssets) {
+      let photos = try await self.professionalOutputPhotos()
+      return try await AVFoundationSlideshowExporter(renderer: self.renderer).export(
+        PhotoSlideshowExportRequest(
+          title: title,
+          slides: photos,
+          destinationURL: destinationURL
+        )
+      )
+    }
+  }
+
+  public func exportWebGallery(
+    to destinationURL: URL,
+    title: String = "PhotoSuite Gallery"
+  ) async {
+    await exportProfessionalOutput(operation: "web gallery", assets: professionalOutputAssets) {
+      let photos = try await self.professionalOutputPhotos()
+      return try await StaticHTMLGalleryExporter(renderer: self.renderer).export(
+        PhotoGalleryExportRequest(
+          title: title,
+          items: photos,
+          destinationURL: destinationURL
+        )
+      )
     }
   }
 
@@ -364,6 +423,15 @@ public final class PhotoWorkspace {
   public func setColorLabel(_ colorLabel: ColorLabel?) async {
     await enqueueLibraryMutation { [weak self] in
       await self?.updateSelectedAssetMetadata(rating: nil, colorLabel: .some(colorLabel))
+    }
+  }
+
+  /// Persist the editable IPTC/EXIF/XMP-like record without changing source bytes or identity.
+  /// Catalogs created before metadata support continue to work, but report a typed capability
+  /// error instead of silently discarding the edit.
+  public func updateSelectedMetadata(_ metadata: PhotoMetadata) async {
+    await enqueueLibraryMutation { [weak self] in
+      await self?.performUpdateSelectedMetadata(metadata)
     }
   }
 
@@ -1017,6 +1085,57 @@ public final class PhotoWorkspace {
     }
   }
 
+  private func performUpdateSelectedMetadata(_ metadata: PhotoMetadata) async {
+    guard let asset = selectedAsset else {
+      record(
+        PhotoWorkspaceError.noSelection(operation: "metadata editing"),
+        operation: "library.metadata.edit"
+      )
+      return
+    }
+    guard let metadataCatalog = catalog as? any MetadataCatalogStore else {
+      record(PhotoWorkspaceError.metadataStoreUnavailable, operation: "library.metadata.edit")
+      return
+    }
+    guard metadata != asset.metadata else { return }
+    guard
+      PhotoAsset(
+        id: asset.id,
+        sourceURL: asset.sourceURL,
+        filename: asset.filename,
+        typeIdentifier: asset.typeIdentifier,
+        fingerprint: asset.fingerprint,
+        importDate: asset.importDate,
+        captureDate: asset.captureDate,
+        pixelDimensions: asset.pixelDimensions,
+        rating: asset.rating,
+        colorLabel: asset.colorLabel,
+        isMissing: asset.isMissing,
+        metadata: metadata
+      ) != nil
+    else {
+      record(
+        PhotoWorkspaceError.operationFailed(
+          operation: "library.metadata.edit",
+          message: "The metadata record is invalid."
+        ),
+        operation: "library.metadata.edit"
+      )
+      return
+    }
+    do {
+      let persisted = try await metadataCatalog.updateMetadata(
+        CatalogAssetMetadataUpdateRequest(assetID: asset.id, metadata: metadata)
+      ).asset
+      guard let index = assets.firstIndex(where: { $0.id == persisted.id }) else { return }
+      assets[index] = persisted
+      lastError = nil
+      errorMessage = nil
+    } catch {
+      record(error, operation: "library.metadata.edit")
+    }
+  }
+
   private func editableRecipe(operation: String) -> EditRecipe? {
     guard let recipe = currentRecipe else {
       record(PhotoWorkspaceError.noSelection(operation: operation), operation: operation)
@@ -1054,6 +1173,64 @@ public final class PhotoWorkspace {
         isMissing: true,
         metadata: asset.metadata
       ) ?? asset
+    }
+  }
+
+  private func professionalOutputPhotos() async throws -> [ProfessionalOutputPhoto] {
+    var photos: [ProfessionalOutputPhoto] = []
+    for asset in professionalOutputAssets {
+      guard
+        let recipe = try await catalog.latestRecipe(
+          CatalogLatestRecipeRequest(assetID: asset.id)
+        ).recipe
+      else {
+        continue
+      }
+      photos.append(ProfessionalOutputPhoto(asset: asset, recipe: recipe, caption: asset.filename))
+    }
+    guard !photos.isEmpty else {
+      throw PhotoWorkspaceError.noSelection(operation: "professional export")
+    }
+    return photos
+  }
+
+  private func exportProfessionalOutput(
+    operation: String,
+    assets: [PhotoAsset],
+    exporter: () async throws -> URL
+  ) async {
+    guard !assets.isEmpty else {
+      record(
+        PhotoWorkspaceError.noSelection(operation: "(operation) export"),
+        operation: "workspace.\(operation)"
+      )
+      return
+    }
+    isProfessionalExporting = true
+    lastProfessionalOutput = nil
+    errorMessage = nil
+    lastError = nil
+    var scopedURLs: [URL] = []
+    for asset in assets {
+      if await sourceAccess.start(asset.sourceURL) {
+        scopedURLs.append(asset.sourceURL)
+      }
+    }
+    do {
+      let destinationURL = try await exporter()
+      await stopScopedSources(scopedURLs)
+      lastProfessionalOutput = destinationURL
+      isProfessionalExporting = false
+    } catch {
+      await stopScopedSources(scopedURLs)
+      isProfessionalExporting = false
+      record(error, operation: "workspace.\(operation)")
+    }
+  }
+
+  private func stopScopedSources(_ urls: [URL]) async {
+    for url in urls {
+      await sourceAccess.stop(url)
     }
   }
 

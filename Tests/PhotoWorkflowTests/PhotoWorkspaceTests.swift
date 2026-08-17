@@ -657,6 +657,34 @@ final class PhotoWorkspaceTests: XCTestCase {
     XCTAssertEqual(stored.colorLabel, .green)
   }
 
+  func testMetadataEditorPersistsDurableMetadataAndKeepsSourceIdentity() async throws {
+    let asset = makeAsset(name: "metadata.jpg")
+    let originalFingerprint = asset.fingerprint
+    let catalog = CatalogSpy(assets: [asset], recipes: [asset.id: makeRecipe(assetID: asset.id)])
+    let workspace = makeWorkspace(catalog: catalog)
+    await workspace.reopen()
+
+    let metadata = try XCTUnwrap(
+      PhotoMetadata(
+        title: " Harbour at dusk ",
+        creator: "Immanuel Lam",
+        copyrightNotice: "© PhotoSuite",
+        city: "Sydney",
+        countryCode: "au",
+        keywords: ["harbour", "Sydney", "harbour"]
+      )
+    )
+    await workspace.updateSelectedMetadata(metadata)
+
+    XCTAssertEqual(workspace.selectedAsset?.metadata, metadata)
+    XCTAssertEqual(workspace.selectedAsset?.fingerprint, originalFingerprint)
+    XCTAssertNil(workspace.lastError)
+    let storedAssets = await catalog.assetSnapshot()
+    let stored = try XCTUnwrap(storedAssets.first)
+    XCTAssertEqual(stored.metadata, metadata)
+    XCTAssertEqual(stored.fingerprint, originalFingerprint)
+  }
+
   func testCollectionsStacksAndSmartFiltersComposeWithoutChangingAssets() async throws {
     let green = makeAsset(name: "green.jpg", rating: 4, colorLabel: .green)
     let red = makeAsset(name: "red.jpg", rating: 2, colorLabel: .red)
@@ -750,7 +778,7 @@ final class PhotoWorkspaceTests: XCTestCase {
     XCTAssertEqual(activeAccessCount, 0)
   }
 
-  func testProfessionalToolsReportPreviewOnlyAndTypedUnavailableStates() async throws {
+  func testProfessionalToolsReportAvailableAndTypedUnavailableStates() async throws {
     let asset = makeAsset(name: "professional.jpg")
     let workspace = makeWorkspace(
       catalog: CatalogSpy(assets: [asset], recipes: [asset.id: makeRecipe(assetID: asset.id)])
@@ -762,14 +790,8 @@ final class PhotoWorkspaceTests: XCTestCase {
       workspace.professionalStatus(for: .tether),
       .previewOnly(.cameraAdapterRequired)
     )
-    XCTAssertEqual(
-      workspace.professionalStatus(for: .book),
-      .previewOnly(.bookExportUnavailable)
-    )
-    XCTAssertEqual(
-      workspace.professionalStatus(for: .webGallery),
-      .previewOnly(.webPublishingUnavailable)
-    )
+    XCTAssertEqual(workspace.professionalStatus(for: .book), .available)
+    XCTAssertEqual(workspace.professionalStatus(for: .webGallery), .available)
     XCTAssertEqual(
       workspace.professionalStatus(for: .plugins),
       .unavailable(.pluginHostUnavailable)
@@ -890,7 +912,7 @@ extension PhotoWorkspaceTests {
   }
 }
 
-private actor CatalogSpy: CatalogStore {
+private actor CatalogSpy: MetadataCatalogStore {
   private var storedAssets: [PhotoAsset]
   private var recipes: [UUID: EditRecipe]
   private var recipeSaves: [EditRecipe] = []
@@ -969,6 +991,56 @@ private actor CatalogSpy: CatalogStore {
 
   func backup(_ request: CatalogBackupRequest) async throws -> CatalogBackupResult {
     CatalogBackupResult(destinationURL: request.destinationURL)
+  }
+
+  func updateMetadata(
+    _ request: CatalogAssetMetadataUpdateRequest
+  ) async throws -> CatalogAssetMetadataUpdateResult {
+    guard let old = storedAssets.first(where: { $0.id == request.assetID }),
+      let updated = PhotoAsset(
+        id: old.id,
+        sourceURL: old.sourceURL,
+        filename: old.filename,
+        typeIdentifier: old.typeIdentifier,
+        fingerprint: old.fingerprint,
+        importDate: old.importDate,
+        captureDate: old.captureDate,
+        pixelDimensions: old.pixelDimensions,
+        rating: old.rating,
+        colorLabel: old.colorLabel,
+        isMissing: old.isMissing,
+        metadata: request.metadata
+      )
+    else {
+      throw TestError.unused
+    }
+    storedAssets.removeAll { $0.id == updated.id }
+    storedAssets.append(updated)
+    return CatalogAssetMetadataUpdateResult(asset: updated)
+  }
+
+  func saveMetadataPreset(
+    _ request: CatalogMetadataPresetSaveRequest
+  ) async throws -> CatalogMetadataPresetSaveResult {
+    CatalogMetadataPresetSaveResult(preset: request.preset)
+  }
+
+  func listMetadataPresets(
+    _ request: CatalogMetadataPresetListRequest
+  ) async throws -> CatalogMetadataPresetListResult {
+    CatalogMetadataPresetListResult(presets: [])
+  }
+
+  func deleteMetadataPreset(
+    _ request: CatalogMetadataPresetDeleteRequest
+  ) async throws -> CatalogMetadataPresetDeleteResult {
+    CatalogMetadataPresetDeleteResult(presetID: request.presetID)
+  }
+
+  func applyMetadataPreset(
+    _ request: CatalogApplyMetadataPresetRequest
+  ) async throws -> CatalogApplyMetadataPresetResult {
+    throw TestError.unused
   }
 
   func savedRecipes() -> [EditRecipe] { recipeSaves }

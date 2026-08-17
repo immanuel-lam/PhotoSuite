@@ -8,6 +8,7 @@ import ImageIO
 import MapKit
 import PhotoWorkflow
 import SwiftUI
+import UniformTypeIdentifiers
 
 @MainActor
 struct ProfessionalWorkspaceView: View {
@@ -115,27 +116,23 @@ private struct ProfessionalToolDetail: View {
     case .print:
       PrintToolView(workspace: workspace)
     case .book:
-      ProofToolView(
+      ProfessionalOutputToolView(
         workspace: workspace,
         tool: .book,
-        description: "Review the selected photograph as a book proof. "
-          + "Page layout and PDF book export are not implemented.",
-        disabledAction: "Export Book"
+        description: "Create a portable PDF book from the active Library selection. "
+          + "Each page contains a colour-managed rendered photograph and caption."
       )
     case .slideshow:
-      ProofToolView(
+      ProfessionalOutputToolView(
         workspace: workspace,
         tool: .slideshow,
-        description: "Review the selected photograph on a neutral presentation surface.",
-        disabledAction: nil
+        description: "Create a silent H.264 slideshow movie from the active Library selection."
       )
     case .webGallery:
-      ProofToolView(
+      ProfessionalOutputToolView(
         workspace: workspace,
         tool: .webGallery,
-        description: "Review a local gallery proof. "
-          + "Hosting, credentials, and publishing are not implemented.",
-        disabledAction: "Publish Gallery"
+        description: "Create a self-contained static WebKit gallery for local hosting or upload."
       )
     case .plugins:
       UnavailableToolView(
@@ -269,11 +266,10 @@ private struct PrintToolView: View {
 }
 
 @MainActor
-private struct ProofToolView: View {
+private struct ProfessionalOutputToolView: View {
   @Bindable var workspace: PhotoWorkspace
   let tool: ProfessionalTool
   let description: String
-  let disabledAction: String?
 
   var body: some View {
     ProfessionalStatusSurface(tool: tool, status: workspace.professionalStatus(for: tool)) {
@@ -282,9 +278,68 @@ private struct ProofToolView: View {
         .frame(maxWidth: 700, alignment: .leading)
       PhotoProofPreview(preview: workspace.preview)
         .frame(maxWidth: 700, minHeight: 360, maxHeight: 520)
-      if let disabledAction {
-        Button(disabledAction) {}
-          .disabled(true)
+      HStack(spacing: 12) {
+        Button(actionTitle) { presentSavePanel() }
+          .buttonStyle(.borderedProminent)
+          .disabled(
+            workspace.isProfessionalExporting
+              || workspace.professionalOutputAssets.isEmpty
+          )
+        if workspace.isProfessionalExporting {
+          ProgressView().controlSize(.small)
+        }
+      }
+      if let output = workspace.lastProfessionalOutput {
+        Label("Published (output.lastPathComponent)", systemImage: "checkmark.circle.fill")
+          .font(.callout)
+          .foregroundStyle(.green)
+          .textSelection(.enabled)
+      }
+    }
+  }
+
+  private var actionTitle: String {
+    switch tool {
+    case .book: "Export PDF Book…"
+    case .slideshow: "Export Slideshow…"
+    case .webGallery: "Export Web Gallery…"
+    default: "Export…"
+    }
+  }
+
+  private func presentSavePanel() {
+    let panel = NSSavePanel()
+    panel.canCreateDirectories = true
+    panel.isExtensionHidden = false
+    switch tool {
+    case .book:
+      panel.title = "Export PDF Book"
+      panel.allowedContentTypes = [.pdf]
+      panel.nameFieldStringValue = "PhotoSuite-Book.pdf"
+    case .slideshow:
+      panel.title = "Export Slideshow"
+      panel.allowedContentTypes = [.quickTimeMovie]
+      panel.nameFieldStringValue = "PhotoSuite-Slideshow.mov"
+    case .webGallery:
+      panel.title = "Export Web Gallery"
+      panel.allowedContentTypes = [.folder]
+      panel.nameFieldStringValue = "PhotoSuite-Gallery"
+    default:
+      return
+    }
+    panel.begin { response in
+      guard response == .OK, let destination = panel.url else { return }
+      Task { @MainActor in
+        switch tool {
+        case .book:
+          await workspace.exportBook(to: destination)
+        case .slideshow:
+          await workspace.exportSlideshow(to: destination)
+        case .webGallery:
+          await workspace.exportWebGallery(to: destination)
+        default:
+          break
+        }
       }
     }
   }

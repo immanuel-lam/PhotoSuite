@@ -381,6 +381,7 @@ public enum PhotoWorkspaceError: Error, Equatable, LocalizedError, Sendable {
   case invalidSelection(UUID)
   case invalidAdjustment(String)
   case invalidRating(Int)
+  case metadataStoreUnavailable
   case noSelection(operation: String)
   case unknownOperationsBlockEditing
   case unsupportedDeliverOptions([String])
@@ -394,6 +395,8 @@ public enum PhotoWorkspaceError: Error, Equatable, LocalizedError, Sendable {
     case .invalidSelection: "The selected photograph is not in the catalog."
     case .invalidAdjustment(let name): "The \(name) adjustment value is invalid."
     case .invalidRating(let rating): "Rating \(rating) is outside the range 0 through 5."
+    case .metadataStoreUnavailable:
+      "The current catalog does not support durable metadata editing."
     case .noSelection(let operation): "Select a photograph before you use \(operation)."
     case .unknownOperationsBlockEditing:
       "This recipe contains edits from a newer version. PhotoSuite did not change it."
