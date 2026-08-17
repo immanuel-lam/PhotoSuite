@@ -77,9 +77,10 @@ vendor camera SDK adapters, print templates and soft proofing, hosted
 publishing, plug-in hosting, Adobe migration, AI features beyond the
 verified Vision subset, texture-aware retouching, and production support for
 the full range of Lightroom formats remain incomplete. Embedded XMP writing, full
-metadata batch editing, complete keyword-taxonomy authoring, people UI, identity
-recognition, and full virtual-copy batch/export workflow support are also incomplete.
-Durable face regions and labels are available without identity recognition. An atomic XMP
+metadata batch editing, complete keyword-taxonomy authoring, identity recognition,
+and full virtual-copy batch/export workflow support are also incomplete. The native
+People inspector can review durable Vision geometry and save or clear optional
+user-authored labels; it does not infer biometric identity. An atomic XMP
 sidecar writer/reader and a bounded standards-based Adobe XMP Develop-preset
 importer exist as tested interoperability cores, but proprietary Lightroom
 catalog parsing is not implemented. Cloud services, mobile clients, and web editing are out
