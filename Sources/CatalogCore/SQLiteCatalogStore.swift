@@ -67,8 +67,9 @@ private struct SQLiteIndexColumn: Equatable {
   let isKey: Bool
 }
 
-public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCatalogStore, JobEngine {
-  private static let schemaVersion: Int64 = 4
+public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCatalogStore, JobEngine
+{
+  private static let schemaVersion: Int64 = 6
   private let connection: SQLiteConnection
   private let ftsAvailable: Bool
   private let encoder: JSONEncoder
@@ -407,8 +408,10 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
         try bind(assetID: collection.id, to: statement, index: 1, operation: "collection.save")
         try bind(collection.name, to: statement, index: 2, operation: "collection.save")
         try bind(collection.kind.rawValue, to: statement, index: 3, operation: "collection.save")
-        try bind(milliseconds(collection.createdAt), to: statement, index: 4, operation: "collection.save")
-        try bind(milliseconds(collection.updatedAt), to: statement, index: 5, operation: "collection.save")
+        try bind(
+          milliseconds(collection.createdAt), to: statement, index: 4, operation: "collection.save")
+        try bind(
+          milliseconds(collection.updatedAt), to: statement, index: 5, operation: "collection.save")
         try bind(predicate, to: statement, index: 6, operation: "collection.save")
         try stepDone(statement, operation: "collection.save")
       }
@@ -416,7 +419,8 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
         "DELETE FROM collection_assets WHERE collection_id = ?;",
         operation: "collection.members.delete"
       ) { statement in
-        try bind(assetID: collection.id, to: statement, index: 1, operation: "collection.members.delete")
+        try bind(
+          assetID: collection.id, to: statement, index: 1, operation: "collection.members.delete")
         try stepDone(statement, operation: "collection.members.delete")
       }
       for (position, assetID) in collection.assetIDs.enumerated() {
@@ -424,8 +428,10 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
           "INSERT INTO collection_assets (collection_id, asset_id, position) VALUES (?, ?, ?);",
           operation: "collection.members.insert"
         ) { statement in
-          try bind(assetID: collection.id, to: statement, index: 1, operation: "collection.members.insert")
-          try bind(assetID: assetID, to: statement, index: 2, operation: "collection.members.insert")
+          try bind(
+            assetID: collection.id, to: statement, index: 1, operation: "collection.members.insert")
+          try bind(
+            assetID: assetID, to: statement, index: 2, operation: "collection.members.insert")
           try bind(
             Int64(position), to: statement, index: 3, operation: "collection.members.insert")
           try stepDone(statement, operation: "collection.members.insert")
@@ -451,7 +457,9 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
       while true {
         let code = sqlite3_step(statement)
         if code == SQLITE_DONE { break }
-        guard code == SQLITE_ROW else { throw sqliteError(operation: "collection.list", code: code) }
+        guard code == SQLITE_ROW else {
+          throw sqliteError(operation: "collection.list", code: code)
+        }
         results.append(try decodeCollection(statement, operation: "collection.list"))
       }
       return results
@@ -483,7 +491,8 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
     try withStatement(
       "DELETE FROM collections WHERE id = ?;", operation: "collection.delete"
     ) { statement in
-      try bind(assetID: request.collectionID, to: statement, index: 1, operation: "collection.delete")
+      try bind(
+        assetID: request.collectionID, to: statement, index: 1, operation: "collection.delete")
       try stepDone(statement, operation: "collection.delete")
     }
     guard sqlite3_changes(database) == 1 else {
@@ -517,7 +526,8 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
           """,
         operation: "collection.assets.regular",
         bindValues: { statement in
-          try bind(assetID: collection.id, to: statement, index: 1, operation: "collection.assets.regular")
+          try bind(
+            assetID: collection.id, to: statement, index: 1, operation: "collection.assets.regular")
         }
       )
     case .smart:
@@ -561,8 +571,10 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
         operation: "stack.save"
       ) { statement in
         try bind(assetID: stack.id, to: statement, index: 1, operation: "stack.save")
-        try bind(assetID: stack.representativeAssetID, to: statement, index: 2, operation: "stack.save")
-        try bind(stack.isCollapsed ? Int64(1) : Int64(0), to: statement, index: 3, operation: "stack.save")
+        try bind(
+          assetID: stack.representativeAssetID, to: statement, index: 2, operation: "stack.save")
+        try bind(
+          stack.isCollapsed ? Int64(1) : Int64(0), to: statement, index: 3, operation: "stack.save")
         try bind(milliseconds(stack.createdAt), to: statement, index: 4, operation: "stack.save")
         try bind(milliseconds(stack.updatedAt), to: statement, index: 5, operation: "stack.save")
         try stepDone(statement, operation: "stack.save")
@@ -588,7 +600,8 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
     return CatalogStackSaveResult(stack: stack)
   }
 
-  public func listStacks(_ request: CatalogStackListRequest) async throws -> CatalogStackListResult {
+  public func listStacks(_ request: CatalogStackListRequest) async throws -> CatalogStackListResult
+  {
     _ = request
     let stacks: [PhotoStack] = try withStatement(
       """
@@ -607,32 +620,36 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
       }
       return results
     }
-    return CatalogStackListResult(stacks: try stacks.map { stack in
-      guard
-        let updated = PhotoStack(
-          id: stack.id,
-          assetIDs: try assetIDs(forStackID: stack.id, operation: "stack.list"),
-          representativeAssetID: stack.representativeAssetID,
-          isCollapsed: stack.isCollapsed,
-          createdAt: stack.createdAt,
-          updatedAt: stack.updatedAt
-        )
-      else {
-        throw CatalogStoreError.decoding(
-          operation: "stack.list", message: "The stored stack membership is invalid.")
-      }
-      return updated
-    })
+    return CatalogStackListResult(
+      stacks: try stacks.map { stack in
+        guard
+          let updated = PhotoStack(
+            id: stack.id,
+            assetIDs: try assetIDs(forStackID: stack.id, operation: "stack.list"),
+            representativeAssetID: stack.representativeAssetID,
+            isCollapsed: stack.isCollapsed,
+            createdAt: stack.createdAt,
+            updatedAt: stack.updatedAt
+          )
+        else {
+          throw CatalogStoreError.decoding(
+            operation: "stack.list", message: "The stored stack membership is invalid.")
+        }
+        return updated
+      })
   }
 
-  public func deleteStack(_ request: CatalogStackDeleteRequest) async throws -> CatalogStackDeleteResult {
+  public func deleteStack(_ request: CatalogStackDeleteRequest) async throws
+    -> CatalogStackDeleteResult
+  {
     try withStatement("DELETE FROM photo_stacks WHERE id = ?;", operation: "stack.delete") {
       statement in
       try bind(assetID: request.stackID, to: statement, index: 1, operation: "stack.delete")
       try stepDone(statement, operation: "stack.delete")
     }
     guard sqlite3_changes(database) == 1 else {
-      throw CatalogStoreError.notFound(operation: "stack.delete", message: "The stack does not exist.")
+      throw CatalogStoreError.notFound(
+        operation: "stack.delete", message: "The stack does not exist.")
     }
     return CatalogStackDeleteResult(stackID: request.stackID)
   }
@@ -641,7 +658,8 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
     _ request: CatalogStackAssetsRequest
   ) async throws -> CatalogStackAssetsResult {
     guard try stack(id: request.stackID, operation: "stack.assets") != nil else {
-      throw CatalogStoreError.notFound(operation: "stack.assets", message: "The stack does not exist.")
+      throw CatalogStoreError.notFound(
+        operation: "stack.assets", message: "The stack does not exist.")
     }
     return CatalogStackAssetsResult(
       assets: try assets(
@@ -672,7 +690,8 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
         throw CatalogStoreError.notFound(
           operation: "keyword.save", message: "The keyword parent does not exist.")
       }
-      guard try !keywordHasAncestor(keyword.id, startingAt: parentID, operation: "keyword.save") else {
+      guard try !keywordHasAncestor(keyword.id, startingAt: parentID, operation: "keyword.save")
+      else {
         throw CatalogStoreError.invalidRequest(
           operation: "keyword.save", message: "A keyword cannot be its own ancestor.")
       }
@@ -700,7 +719,9 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
     ) { statement in
       try bind(assetID: keyword.id, to: statement, index: 1, operation: "keyword.save")
       try bind(keyword.name, to: statement, index: 2, operation: "keyword.save")
-      try bind(keyword.parentID.map { $0.uuidString.lowercased() }, to: statement, index: 3, operation: "keyword.save")
+      try bind(
+        keyword.parentID.map { $0.uuidString.lowercased() }, to: statement, index: 3,
+        operation: "keyword.save")
       try bind(keyword.normalizedName, to: statement, index: 4, operation: "keyword.save")
       try bind(milliseconds(keyword.createdAt), to: statement, index: 5, operation: "keyword.save")
       try bind(milliseconds(keyword.updatedAt), to: statement, index: 6, operation: "keyword.save")
@@ -742,13 +763,18 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
         operation: "keyword.delete", message: "The keyword does not exist.")
     }
     let childCount = try scalarInt(
-      sql: "SELECT COUNT(*) FROM keyword_nodes WHERE parent_id = ?;", operation: "keyword.delete") { statement in
-        try self.bind(assetID: request.keywordID, to: statement, index: 1, operation: "keyword.delete")
-      }
+      sql: "SELECT COUNT(*) FROM keyword_nodes WHERE parent_id = ?;", operation: "keyword.delete"
+    ) { statement in
+      try self.bind(
+        assetID: request.keywordID, to: statement, index: 1, operation: "keyword.delete")
+    }
     let assignmentCount = try scalarInt(
-      sql: "SELECT COUNT(*) FROM asset_keyword_nodes WHERE keyword_id = ?;", operation: "keyword.delete") { statement in
-        try self.bind(assetID: request.keywordID, to: statement, index: 1, operation: "keyword.delete")
-      }
+      sql: "SELECT COUNT(*) FROM asset_keyword_nodes WHERE keyword_id = ?;",
+      operation: "keyword.delete"
+    ) { statement in
+      try self.bind(
+        assetID: request.keywordID, to: statement, index: 1, operation: "keyword.delete")
+    }
     guard childCount == 0, assignmentCount == 0 else {
       throw CatalogStoreError.invalidRequest(
         operation: "keyword.delete",
@@ -781,9 +807,11 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
     }
     try withTransaction(operation: "asset.keywords.set") {
       try withStatement(
-        "DELETE FROM asset_keyword_nodes WHERE asset_id = ?;", operation: "asset.keywords.set.delete"
+        "DELETE FROM asset_keyword_nodes WHERE asset_id = ?;",
+        operation: "asset.keywords.set.delete"
       ) { statement in
-        try bind(assetID: request.assetID, to: statement, index: 1, operation: "asset.keywords.set.delete")
+        try bind(
+          assetID: request.assetID, to: statement, index: 1, operation: "asset.keywords.set.delete")
         try stepDone(statement, operation: "asset.keywords.set.delete")
       }
       for keywordID in request.keywordIDs {
@@ -791,8 +819,11 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
           "INSERT INTO asset_keyword_nodes (asset_id, keyword_id) VALUES (?, ?);",
           operation: "asset.keywords.set.insert"
         ) { statement in
-          try bind(assetID: request.assetID, to: statement, index: 1, operation: "asset.keywords.set.insert")
-          try bind(assetID: keywordID, to: statement, index: 2, operation: "asset.keywords.set.insert")
+          try bind(
+            assetID: request.assetID, to: statement, index: 1,
+            operation: "asset.keywords.set.insert")
+          try bind(
+            assetID: keywordID, to: statement, index: 2, operation: "asset.keywords.set.insert")
           try stepDone(statement, operation: "asset.keywords.set.insert")
         }
       }
@@ -863,10 +894,13 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
       operation: "virtualCopy.save"
     ) { statement in
       try bind(assetID: virtualCopy.id, to: statement, index: 1, operation: "virtualCopy.save")
-      try bind(assetID: virtualCopy.sourceAssetID, to: statement, index: 2, operation: "virtualCopy.save")
+      try bind(
+        assetID: virtualCopy.sourceAssetID, to: statement, index: 2, operation: "virtualCopy.save")
       try bind(virtualCopy.name, to: statement, index: 3, operation: "virtualCopy.save")
-      try bind(milliseconds(virtualCopy.createdAt), to: statement, index: 4, operation: "virtualCopy.save")
-      try bind(milliseconds(virtualCopy.updatedAt), to: statement, index: 5, operation: "virtualCopy.save")
+      try bind(
+        milliseconds(virtualCopy.createdAt), to: statement, index: 4, operation: "virtualCopy.save")
+      try bind(
+        milliseconds(virtualCopy.updatedAt), to: statement, index: 5, operation: "virtualCopy.save")
       try stepDone(statement, operation: "virtualCopy.save")
     }
     return CatalogVirtualCopySaveResult(virtualCopy: virtualCopy)
@@ -904,7 +938,8 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
     try withStatement(
       "DELETE FROM virtual_copies WHERE id = ?;", operation: "virtualCopy.delete"
     ) { statement in
-      try bind(assetID: request.virtualCopyID, to: statement, index: 1, operation: "virtualCopy.delete")
+      try bind(
+        assetID: request.virtualCopyID, to: statement, index: 1, operation: "virtualCopy.delete")
       try stepDone(statement, operation: "virtualCopy.delete")
     }
     guard sqlite3_changes(database) == 1 else {
@@ -912,6 +947,368 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
         operation: "virtualCopy.delete", message: "The virtual copy does not exist.")
     }
     return CatalogVirtualCopyDeleteResult(virtualCopyID: request.virtualCopyID)
+  }
+
+  public func saveDevelopPreset(
+    _ request: CatalogDevelopPresetSaveRequest
+  ) async throws -> CatalogDevelopPresetSaveResult {
+    let preset = request.preset
+    if let virtualCopyID = preset.virtualCopyID {
+      guard try virtualCopy(id: virtualCopyID, operation: "developPreset.save") != nil else {
+        throw CatalogStoreError.notFound(
+          operation: "developPreset.save",
+          message: "The preset virtual copy does not exist."
+        )
+      }
+    }
+    if let existingID = try developPresetID(name: preset.name, operation: "developPreset.save"),
+      existingID != preset.id
+    {
+      throw CatalogStoreError.invalidRequest(
+        operation: "developPreset.save",
+        message: "A Develop preset with this name already exists."
+      )
+    }
+    let operations = try encode(preset.operations, operation: "developPreset.save.operations")
+    try withStatement(
+      """
+      INSERT INTO develop_presets (
+        id, name, schema_version, created_ms, updated_ms, operations_json, virtual_copy_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        name=excluded.name,
+        schema_version=excluded.schema_version,
+        created_ms=excluded.created_ms,
+        updated_ms=excluded.updated_ms,
+        operations_json=excluded.operations_json,
+        virtual_copy_id=excluded.virtual_copy_id;
+      """,
+      operation: "developPreset.save"
+    ) { statement in
+      try bind(assetID: preset.id, to: statement, index: 1, operation: "developPreset.save")
+      try bind(preset.name, to: statement, index: 2, operation: "developPreset.save")
+      try bind(
+        Int64(preset.schemaVersion), to: statement, index: 3, operation: "developPreset.save")
+      try bind(
+        milliseconds(preset.createdAt), to: statement, index: 4, operation: "developPreset.save")
+      try bind(
+        milliseconds(preset.updatedAt), to: statement, index: 5, operation: "developPreset.save")
+      try bind(operations, to: statement, index: 6, operation: "developPreset.save")
+      try bind(
+        preset.virtualCopyID?.uuidString.lowercased(),
+        to: statement,
+        index: 7,
+        operation: "developPreset.save"
+      )
+      try stepDone(statement, operation: "developPreset.save")
+    }
+    return CatalogDevelopPresetSaveResult(preset: preset)
+  }
+
+  public func listDevelopPresets(
+    _ request: CatalogDevelopPresetListRequest
+  ) async throws -> CatalogDevelopPresetListResult {
+    _ = request
+    let presets: [DevelopPreset] = try withStatement(
+      """
+      SELECT id, name, schema_version, created_ms, updated_ms, operations_json, virtual_copy_id
+      FROM develop_presets
+      ORDER BY name COLLATE NOCASE ASC, id ASC;
+      """,
+      operation: "developPreset.list"
+    ) { statement in
+      var results: [DevelopPreset] = []
+      while true {
+        let code = sqlite3_step(statement)
+        if code == SQLITE_DONE { break }
+        guard code == SQLITE_ROW else {
+          throw sqliteError(operation: "developPreset.list", code: code)
+        }
+        results.append(try decodeDevelopPreset(statement, operation: "developPreset.list"))
+      }
+      return results
+    }
+    return CatalogDevelopPresetListResult(presets: presets)
+  }
+
+  public func deleteDevelopPreset(
+    _ request: CatalogDevelopPresetDeleteRequest
+  ) async throws -> CatalogDevelopPresetDeleteResult {
+    try withStatement(
+      "DELETE FROM develop_presets WHERE id = ?;", operation: "developPreset.delete"
+    ) { statement in
+      try bind(
+        assetID: request.presetID, to: statement, index: 1, operation: "developPreset.delete")
+      try stepDone(statement, operation: "developPreset.delete")
+    }
+    guard sqlite3_changes(database) == 1 else {
+      throw CatalogStoreError.notFound(
+        operation: "developPreset.delete", message: "The Develop preset does not exist.")
+    }
+    return CatalogDevelopPresetDeleteResult(presetID: request.presetID)
+  }
+
+  public func applyDevelopPreset(
+    _ request: CatalogApplyDevelopPresetRequest
+  ) async throws -> CatalogApplyDevelopPresetResult {
+    guard try assetExists(request.assetID, operation: "developPreset.apply") else {
+      throw CatalogStoreError.notFound(
+        operation: "developPreset.apply", message: "The asset does not exist.")
+    }
+    guard let preset = try developPreset(id: request.presetID, operation: "developPreset.apply")
+    else {
+      throw CatalogStoreError.notFound(
+        operation: "developPreset.apply", message: "The Develop preset does not exist.")
+    }
+    let requestedVirtualCopyID = request.virtualCopyID ?? preset.virtualCopyID
+    if let virtualCopyID = requestedVirtualCopyID {
+      guard
+        let virtualCopy = try virtualCopy(id: virtualCopyID, operation: "developPreset.apply"),
+        virtualCopy.sourceAssetID == request.assetID
+      else {
+        throw CatalogStoreError.notFound(
+          operation: "developPreset.apply",
+          message: "The virtual copy does not belong to the target asset."
+        )
+      }
+    }
+    let targetedRecipe = try await latestRecipe(
+      CatalogLatestRecipeRequest(
+        assetID: request.assetID,
+        virtualCopyID: requestedVirtualCopyID
+      )
+    ).recipe
+    let current: EditRecipe?
+    if let targetedRecipe {
+      current = targetedRecipe
+    } else {
+      current = try await latestRecipe(.init(assetID: request.assetID)).recipe
+    }
+    guard let current else {
+      throw CatalogStoreError.notFound(
+        operation: "developPreset.apply", message: "The target asset has no recipe.")
+    }
+    let (revision, overflow) = current.revision.addingReportingOverflow(1)
+    guard !overflow else {
+      throw CatalogStoreError.invalidRequest(
+        operation: "developPreset.apply", message: "The recipe revision cannot be incremented.")
+    }
+    let retained = current.operations.filter { !Self.isDevelopOperation($0) }
+    let updated = EditRecipe(
+      assetID: request.assetID,
+      virtualCopyID: requestedVirtualCopyID ?? current.virtualCopyID,
+      revision: revision,
+      date: Date(),
+      pins: current.pins,
+      operations: retained + preset.operations,
+      masks: current.masks
+    )
+    let saved = try await saveRecipe(CatalogRecipeSaveRequest(recipe: updated)).recipe
+    return CatalogApplyDevelopPresetResult(recipe: saved)
+  }
+
+  public func saveFolder(
+    _ request: CatalogFolderSaveRequest
+  ) async throws -> CatalogFolderSaveResult {
+    let folder = request.folder
+    if let parentID = folder.parentID {
+      guard try self.folder(id: parentID, operation: "folder.save") != nil else {
+        throw CatalogStoreError.invalidRequest(
+          operation: "folder.save", message: "The folder parent does not exist.")
+      }
+      guard try !folderHasAncestor(folder.id, startingAt: parentID, operation: "folder.save") else {
+        throw CatalogStoreError.invalidRequest(
+          operation: "folder.save", message: "A folder cannot be its own ancestor.")
+      }
+    }
+    if let existingID = try self.folderID(
+      name: folder.normalizedName, parentID: folder.parentID, operation: "folder.save"),
+      existingID != folder.id
+    {
+      throw CatalogStoreError.invalidRequest(
+        operation: "folder.save", message: "A sibling folder with this name already exists.")
+    }
+    try withStatement(
+      """
+      INSERT INTO library_folders (
+        id, name, parent_id, normalized_name, created_ms, updated_ms
+      ) VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        name=excluded.name,
+        parent_id=excluded.parent_id,
+        normalized_name=excluded.normalized_name,
+        created_ms=excluded.created_ms,
+        updated_ms=excluded.updated_ms;
+      """,
+      operation: "folder.save"
+    ) { statement in
+      try bind(assetID: folder.id, to: statement, index: 1, operation: "folder.save")
+      try bind(folder.name, to: statement, index: 2, operation: "folder.save")
+      try bind(
+        folder.parentID.map { $0.uuidString.lowercased() },
+        to: statement,
+        index: 3,
+        operation: "folder.save"
+      )
+      try bind(folder.normalizedName, to: statement, index: 4, operation: "folder.save")
+      try bind(milliseconds(folder.createdAt), to: statement, index: 5, operation: "folder.save")
+      try bind(milliseconds(folder.updatedAt), to: statement, index: 6, operation: "folder.save")
+      try stepDone(statement, operation: "folder.save")
+    }
+    return CatalogFolderSaveResult(folder: folder)
+  }
+
+  public func listFolders(
+    _ request: CatalogFolderListRequest
+  ) async throws -> CatalogFolderListResult {
+    _ = request
+    let folders: [LibraryFolder] = try withStatement(
+      """
+      SELECT id, name, parent_id, normalized_name, created_ms, updated_ms
+      FROM library_folders
+      ORDER BY CASE WHEN parent_id IS NULL THEN 0 ELSE 1 END,
+        parent_id ASC, normalized_name ASC, id ASC;
+      """,
+      operation: "folder.list"
+    ) { statement in
+      var results: [LibraryFolder] = []
+      while true {
+        let code = sqlite3_step(statement)
+        if code == SQLITE_DONE { break }
+        guard code == SQLITE_ROW else { throw sqliteError(operation: "folder.list", code: code) }
+        results.append(try decodeFolder(statement, operation: "folder.list"))
+      }
+      return results
+    }
+    return CatalogFolderListResult(folders: folders)
+  }
+
+  public func deleteFolder(
+    _ request: CatalogFolderDeleteRequest
+  ) async throws -> CatalogFolderDeleteResult {
+    guard try self.folder(id: request.folderID, operation: "folder.delete") != nil else {
+      throw CatalogStoreError.notFound(
+        operation: "folder.delete", message: "The folder does not exist.")
+    }
+    let childCount = try scalarInt(
+      sql: "SELECT COUNT(*) FROM library_folders WHERE parent_id = ?;",
+      operation: "folder.delete"
+    ) { statement in
+      try self.bind(assetID: request.folderID, to: statement, index: 1, operation: "folder.delete")
+    }
+    let assetCount = try scalarInt(
+      sql: "SELECT COUNT(*) FROM asset_folders WHERE folder_id = ?;",
+      operation: "folder.delete"
+    ) { statement in
+      try self.bind(assetID: request.folderID, to: statement, index: 1, operation: "folder.delete")
+    }
+    guard childCount == 0, assetCount == 0 else {
+      throw CatalogStoreError.invalidRequest(
+        operation: "folder.delete",
+        message: "A folder with child folders or assigned assets cannot be deleted."
+      )
+    }
+    try withStatement(
+      "DELETE FROM library_folders WHERE id = ?;", operation: "folder.delete"
+    ) { statement in
+      try self.bind(assetID: request.folderID, to: statement, index: 1, operation: "folder.delete")
+      try stepDone(statement, operation: "folder.delete")
+    }
+    return CatalogFolderDeleteResult(folderID: request.folderID)
+  }
+
+  public func setAssetFolder(
+    _ request: CatalogAssetFolderSetRequest
+  ) async throws -> CatalogAssetFolderSetResult {
+    guard try assetExists(request.assetID, operation: "asset.folder.set") else {
+      throw CatalogStoreError.notFound(
+        operation: "asset.folder.set", message: "The asset does not exist.")
+    }
+    if let folderID = request.folderID {
+      guard try self.folder(id: folderID, operation: "asset.folder.set") != nil else {
+        throw CatalogStoreError.notFound(
+          operation: "asset.folder.set", message: "The folder does not exist.")
+      }
+    }
+    try withTransaction(operation: "asset.folder.set") {
+      if let folderID = request.folderID {
+        try withStatement(
+          """
+          INSERT INTO asset_folders (asset_id, folder_id) VALUES (?, ?)
+          ON CONFLICT(asset_id) DO UPDATE SET folder_id=excluded.folder_id;
+          """,
+          operation: "asset.folder.set"
+        ) { statement in
+          try bind(assetID: request.assetID, to: statement, index: 1, operation: "asset.folder.set")
+          try bind(assetID: folderID, to: statement, index: 2, operation: "asset.folder.set")
+          try stepDone(statement, operation: "asset.folder.set")
+        }
+      } else {
+        try withStatement(
+          "DELETE FROM asset_folders WHERE asset_id = ?;", operation: "asset.folder.clear"
+        ) { statement in
+          try bind(
+            assetID: request.assetID, to: statement, index: 1, operation: "asset.folder.clear")
+          try stepDone(statement, operation: "asset.folder.clear")
+        }
+      }
+    }
+    return CatalogAssetFolderSetResult(assetID: request.assetID, folderID: request.folderID)
+  }
+
+  public func listAssetFolder(
+    _ request: CatalogAssetFolderRequest
+  ) async throws -> CatalogAssetFolderResult {
+    guard try assetExists(request.assetID, operation: "asset.folder.list") else {
+      throw CatalogStoreError.notFound(
+        operation: "asset.folder.list", message: "The asset does not exist.")
+    }
+    let folderID = try withStatement(
+      "SELECT folder_id FROM asset_folders WHERE asset_id = ?;", operation: "asset.folder.list"
+    ) { statement -> UUID? in
+      try bind(assetID: request.assetID, to: statement, index: 1, operation: "asset.folder.list")
+      let code = sqlite3_step(statement)
+      if code == SQLITE_DONE || sqlite3_column_type(statement, 0) == SQLITE_NULL { return nil }
+      guard code == SQLITE_ROW else {
+        throw sqliteError(operation: "asset.folder.list", code: code)
+      }
+      guard
+        let id = UUID(
+          uuidString: try columnString(statement, column: 0, operation: "asset.folder.list"))
+      else {
+        throw CatalogStoreError.decoding(
+          operation: "asset.folder.list", message: "The stored folder ID is invalid.")
+      }
+      return id
+    }
+    return CatalogAssetFolderResult(assetID: request.assetID, folderID: folderID)
+  }
+
+  public func listFolderAssets(
+    _ request: CatalogFolderAssetsRequest
+  ) async throws -> CatalogFolderAssetsResult {
+    guard try self.folder(id: request.folderID, operation: "folder.assets") != nil else {
+      throw CatalogStoreError.notFound(
+        operation: "folder.assets", message: "The folder does not exist.")
+    }
+    return CatalogFolderAssetsResult(
+      assets: try assets(
+        sql: """
+          SELECT assets.id, assets.source_url, assets.filename, assets.type_identifier,
+            assets.fingerprint_json, assets.import_ms, assets.capture_ms,
+            assets.dimensions_json, assets.rating, assets.color_label, assets.is_missing,
+            assets.metadata_json
+          FROM asset_folders
+          JOIN assets ON assets.id = asset_folders.asset_id
+          WHERE asset_folders.folder_id = ?
+          ORDER BY assets.import_ms DESC, assets.id ASC;
+          """,
+        operation: "folder.assets",
+        bindValues: { statement in
+          try bind(assetID: request.folderID, to: statement, index: 1, operation: "folder.assets")
+        }
+      )
+    )
   }
 
   public func listAssets(
@@ -1085,7 +1482,8 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
         """,
         operation: "recipe.save.virtualCopy"
       ) { statement in
-        try bind(assetID: virtualCopyID, to: statement, index: 1, operation: "recipe.save.virtualCopy")
+        try bind(
+          assetID: virtualCopyID, to: statement, index: 1, operation: "recipe.save.virtualCopy")
         try bind(
           Int64(exactly: request.recipe.revision),
           to: statement,
@@ -1126,7 +1524,8 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
   ) async throws -> CatalogLatestRecipeResult {
     if let virtualCopyID = request.virtualCopyID {
       guard
-        let virtualCopy = try virtualCopy(id: virtualCopyID, operation: "recipe.latest.virtualCopy"),
+        let virtualCopy = try virtualCopy(
+          id: virtualCopyID, operation: "recipe.latest.virtualCopy"),
         virtualCopy.sourceAssetID == request.assetID
       else {
         throw CatalogStoreError.notFound(
@@ -1143,7 +1542,8 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
         """,
         operation: "recipe.latest.virtualCopy"
       ) { statement in
-        try bind(assetID: virtualCopyID, to: statement, index: 1, operation: "recipe.latest.virtualCopy")
+        try bind(
+          assetID: virtualCopyID, to: statement, index: 1, operation: "recipe.latest.virtualCopy")
         let code = sqlite3_step(statement)
         if code == SQLITE_DONE { return nil }
         guard code == SQLITE_ROW else {
@@ -1598,6 +1998,50 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
     }
   }
 
+  private func developPreset(id: UUID, operation: String) throws -> DevelopPreset? {
+    try withStatement(
+      "SELECT id, name, schema_version, created_ms, updated_ms, operations_json, virtual_copy_id FROM develop_presets WHERE id = ?;",
+      operation: operation
+    ) { statement in
+      try bind(assetID: id, to: statement, index: 1, operation: operation)
+      let code = sqlite3_step(statement)
+      if code == SQLITE_DONE { return nil }
+      guard code == SQLITE_ROW else { throw sqliteError(operation: operation, code: code) }
+      return try decodeDevelopPreset(statement, operation: operation)
+    }
+  }
+
+  private func developPresetID(name: String, operation: String) throws -> UUID? {
+    try withStatement(
+      "SELECT id FROM develop_presets WHERE name = ? COLLATE NOCASE LIMIT 1;",
+      operation: operation
+    ) { statement in
+      try bind(name, to: statement, index: 1, operation: operation)
+      let code = sqlite3_step(statement)
+      if code == SQLITE_DONE { return nil }
+      guard code == SQLITE_ROW else { throw sqliteError(operation: operation, code: code) }
+      guard let id = UUID(uuidString: try columnString(statement, column: 0, operation: operation))
+      else {
+        throw CatalogStoreError.decoding(
+          operation: operation, message: "The Develop preset ID is invalid.")
+      }
+      return id
+    }
+  }
+
+  private func folder(id: UUID, operation: String) throws -> LibraryFolder? {
+    try withStatement(
+      "SELECT id, name, parent_id, normalized_name, created_ms, updated_ms FROM library_folders WHERE id = ?;",
+      operation: operation
+    ) { statement in
+      try bind(assetID: id, to: statement, index: 1, operation: operation)
+      let code = sqlite3_step(statement)
+      if code == SQLITE_DONE { return nil }
+      guard code == SQLITE_ROW else { throw sqliteError(operation: operation, code: code) }
+      return try decodeFolder(statement, operation: operation)
+    }
+  }
+
   private func collectionID(named name: String, operation: String) throws -> UUID? {
     try withStatement(
       "SELECT id FROM collections WHERE name = ? COLLATE NOCASE LIMIT 1;", operation: operation
@@ -1608,7 +2052,8 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
       guard code == SQLITE_ROW else { throw sqliteError(operation: operation, code: code) }
       guard let id = UUID(uuidString: try columnString(statement, column: 0, operation: operation))
       else {
-        throw CatalogStoreError.decoding(operation: operation, message: "The collection ID is invalid.")
+        throw CatalogStoreError.decoding(
+          operation: operation, message: "The collection ID is invalid.")
       }
       return id
     }
@@ -1637,7 +2082,8 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
       guard code == SQLITE_ROW else { throw sqliteError(operation: operation, code: code) }
       guard let id = UUID(uuidString: try columnString(statement, column: 0, operation: operation))
       else {
-        throw CatalogStoreError.decoding(operation: operation, message: "The keyword ID is invalid.")
+        throw CatalogStoreError.decoding(
+          operation: operation, message: "The keyword ID is invalid.")
       }
       return id
     }
@@ -1666,6 +2112,35 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
     }
   }
 
+  private func folderID(
+    name: String,
+    parentID: UUID?,
+    operation: String
+  ) throws -> UUID? {
+    try withStatement(
+      """
+      SELECT id FROM library_folders
+      WHERE normalized_name = ?
+        AND (parent_id = ? OR (parent_id IS NULL AND ? IS NULL))
+      LIMIT 1;
+      """,
+      operation: operation
+    ) { statement in
+      try bind(name, to: statement, index: 1, operation: operation)
+      let parentValue = parentID?.uuidString.lowercased()
+      try bind(parentValue, to: statement, index: 2, operation: operation)
+      try bind(parentValue, to: statement, index: 3, operation: operation)
+      let code = sqlite3_step(statement)
+      if code == SQLITE_DONE { return nil }
+      guard code == SQLITE_ROW else { throw sqliteError(operation: operation, code: code) }
+      guard let id = UUID(uuidString: try columnString(statement, column: 0, operation: operation))
+      else {
+        throw CatalogStoreError.decoding(operation: operation, message: "The folder ID is invalid.")
+      }
+      return id
+    }
+  }
+
   private func keywordHasAncestor(
     _ id: UUID,
     startingAt ancestorID: UUID,
@@ -1680,6 +2155,25 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
           operation: operation, message: "The keyword hierarchy contains a cycle.")
       }
       guard let current = try keywordNode(id: currentID, operation: operation) else { return false }
+      nextID = current.parentID
+    }
+    return false
+  }
+
+  private func folderHasAncestor(
+    _ id: UUID,
+    startingAt ancestorID: UUID,
+    operation: String
+  ) throws -> Bool {
+    var nextID: UUID? = ancestorID
+    var visited = Set<UUID>()
+    while let currentID = nextID {
+      if currentID == id { return true }
+      guard visited.insert(currentID).inserted else {
+        throw CatalogStoreError.decoding(
+          operation: operation, message: "The folder hierarchy contains a cycle.")
+      }
+      guard let current = try folder(id: currentID, operation: operation) else { return false }
       nextID = current.parentID
     }
     return false
@@ -1742,9 +2236,12 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
         let code = sqlite3_step(statement)
         if code == SQLITE_DONE { break }
         guard code == SQLITE_ROW else { throw sqliteError(operation: operation, code: code) }
-        guard let assetID = UUID(uuidString: try columnString(statement, column: 0, operation: operation))
+        guard
+          let assetID = UUID(
+            uuidString: try columnString(statement, column: 0, operation: operation))
         else {
-          throw CatalogStoreError.decoding(operation: operation, message: "A related asset ID is invalid.")
+          throw CatalogStoreError.decoding(
+            operation: operation, message: "A related asset ID is invalid.")
         }
         ids.append(assetID)
       }
@@ -2199,13 +2696,16 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
   ) throws -> PhotoCollection {
     guard let id = UUID(uuidString: try columnString(statement, column: 0, operation: operation))
     else {
-      throw CatalogStoreError.decoding(operation: operation, message: "The collection ID is invalid.")
+      throw CatalogStoreError.decoding(
+        operation: operation, message: "The collection ID is invalid.")
     }
     let name = try columnString(statement, column: 1, operation: operation)
-    guard let kind = PhotoCollection.Kind(
-      rawValue: try columnString(statement, column: 2, operation: operation))
+    guard
+      let kind = PhotoCollection.Kind(
+        rawValue: try columnString(statement, column: 2, operation: operation))
     else {
-      throw CatalogStoreError.decoding(operation: operation, message: "The collection kind is invalid.")
+      throw CatalogStoreError.decoding(
+        operation: operation, message: "The collection kind is invalid.")
     }
     let predicate = try optionalColumnData(statement, column: 5).map {
       try decode(
@@ -2254,12 +2754,15 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
         updatedAt: optionalDate(statement, column: 4) ?? .distantPast
       )
     else {
-      throw CatalogStoreError.decoding(operation: operation, message: "The stored stack is invalid.")
+      throw CatalogStoreError.decoding(
+        operation: operation, message: "The stored stack is invalid.")
     }
     return stack
   }
 
-  private func decodeKeywordNode(_ statement: OpaquePointer, operation: String) throws -> KeywordNode {
+  private func decodeKeywordNode(_ statement: OpaquePointer, operation: String) throws
+    -> KeywordNode
+  {
     guard let id = UUID(uuidString: try columnString(statement, column: 0, operation: operation))
     else {
       throw CatalogStoreError.decoding(operation: operation, message: "The keyword ID is invalid.")
@@ -2288,7 +2791,9 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
     return keyword
   }
 
-  private func decodeVirtualCopy(_ statement: OpaquePointer, operation: String) throws -> VirtualCopy {
+  private func decodeVirtualCopy(_ statement: OpaquePointer, operation: String) throws
+    -> VirtualCopy
+  {
     guard let id = UUID(uuidString: try columnString(statement, column: 0, operation: operation))
     else {
       throw CatalogStoreError.decoding(
@@ -2314,6 +2819,80 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
         operation: operation, message: "The stored virtual copy is invalid.")
     }
     return virtualCopy
+  }
+
+  private func decodeFolder(_ statement: OpaquePointer, operation: String) throws -> LibraryFolder {
+    guard let id = UUID(uuidString: try columnString(statement, column: 0, operation: operation))
+    else {
+      throw CatalogStoreError.decoding(operation: operation, message: "The folder ID is invalid.")
+    }
+    let name = try columnString(statement, column: 1, operation: operation)
+    let parentID = try optionalColumnString(statement, column: 2).map { value in
+      guard let id = UUID(uuidString: value) else {
+        throw CatalogStoreError.decoding(
+          operation: operation, message: "The folder parent ID is invalid.")
+      }
+      return id
+    }
+    let normalizedName = try columnString(statement, column: 3, operation: operation)
+    guard
+      let folder = LibraryFolder(
+        id: id,
+        name: name,
+        parentID: parentID,
+        createdAt: optionalDate(statement, column: 4) ?? .distantPast,
+        updatedAt: optionalDate(statement, column: 5) ?? .distantPast
+      ),
+      folder.normalizedName == normalizedName
+    else {
+      throw CatalogStoreError.decoding(
+        operation: operation, message: "The stored folder is invalid.")
+    }
+    return folder
+  }
+
+  private func decodeDevelopPreset(
+    _ statement: OpaquePointer,
+    operation: String
+  ) throws -> DevelopPreset {
+    guard let id = UUID(uuidString: try columnString(statement, column: 0, operation: operation))
+    else {
+      throw CatalogStoreError.decoding(
+        operation: operation, message: "The Develop preset ID is invalid.")
+    }
+    let name = try columnString(statement, column: 1, operation: operation)
+    let schemaVersionValue = sqlite3_column_int64(statement, 2)
+    guard let schemaVersion = UInt(exactly: schemaVersionValue) else {
+      throw CatalogStoreError.decoding(
+        operation: operation, message: "The Develop preset schema version is invalid.")
+    }
+    let operations = try decode(
+      [EditOperation].self,
+      from: columnData(statement, column: 5, operation: operation),
+      operation: operation
+    )
+    let virtualCopyID = try optionalColumnString(statement, column: 6).map { value in
+      guard let id = UUID(uuidString: value) else {
+        throw CatalogStoreError.decoding(
+          operation: operation, message: "The Develop preset virtual-copy ID is invalid.")
+      }
+      return id
+    }
+    guard
+      let preset = DevelopPreset(
+        id: id,
+        name: name,
+        schemaVersion: schemaVersion,
+        operations: operations,
+        virtualCopyID: virtualCopyID,
+        createdAt: optionalDate(statement, column: 3) ?? .distantPast,
+        updatedAt: optionalDate(statement, column: 4) ?? .distantPast
+      )
+    else {
+      throw CatalogStoreError.decoding(
+        operation: operation, message: "The stored Develop preset is invalid.")
+    }
+    return preset
   }
 
   private func decodeMetadataPreset(
@@ -2437,24 +3016,41 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
   {
     let shouldUseFTS = ftsAvailabilityOverride ?? (sqlite3_compileoption_used("ENABLE_FTS5") != 0)
     if version == schemaVersion {
-      return try validateVersionFourSchema(database, shouldUseFTS: shouldUseFTS)
+      return try validateVersionSixSchema(database, shouldUseFTS: shouldUseFTS)
     }
     if version == 1 {
       let ftsAvailable = try validateVersionOneSchema(database, shouldUseFTS: shouldUseFTS)
       try migrateToVersionTwo(database)
       try migrateToVersionThree(database)
       try migrateToVersionFour(database)
+      try migrateToVersionFive(database)
+      try migrateToVersionSix(database)
       return ftsAvailable
     }
     if version == 2 {
       let ftsAvailable = try validateVersionTwoSchema(database, shouldUseFTS: shouldUseFTS)
       try migrateToVersionThree(database)
       try migrateToVersionFour(database)
+      try migrateToVersionFive(database)
+      try migrateToVersionSix(database)
       return ftsAvailable
     }
     if version == 3 {
       let ftsAvailable = try validateVersionThreeSchema(database, shouldUseFTS: shouldUseFTS)
       try migrateToVersionFour(database)
+      try migrateToVersionFive(database)
+      try migrateToVersionSix(database)
+      return ftsAvailable
+    }
+    if version == 4 {
+      let ftsAvailable = try validateVersionFourSchema(database, shouldUseFTS: shouldUseFTS)
+      try migrateToVersionFive(database)
+      try migrateToVersionSix(database)
+      return ftsAvailable
+    }
+    if version == 5 {
+      let ftsAvailable = try validateVersionFiveSchema(database, shouldUseFTS: shouldUseFTS)
+      try migrateToVersionSix(database)
       return ftsAvailable
     }
 
@@ -2541,7 +3137,21 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
     try migrateToVersionTwo(database)
     try migrateToVersionThree(database)
     try migrateToVersionFour(database)
+    try migrateToVersionFive(database)
+    try migrateToVersionSix(database)
     return ftsAvailable
+  }
+
+  private static func isDevelopOperation(_ operation: EditOperation) -> Bool {
+    switch operation {
+    case .exposureEV, .contrast, .highlights, .shadows, .saturation,
+      .threeWayColorGrade, .toneCurve, .whiteBalance, .transform, .detail,
+      .optics, .effects, .calibration, .blackAndWhite, .hdr:
+      return true
+    case .maskedAdjustment, .clone, .healing, .redEye, .normalizedCrop,
+      .rotationDegrees, .unknown:
+      return false
+    }
   }
 
   private static func migrateToVersionTwo(_ database: OpaquePointer) throws {
@@ -2706,6 +3316,85 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
     }
   }
 
+  private static func migrateToVersionFive(_ database: OpaquePointer) throws {
+    try execute("BEGIN IMMEDIATE;", database: database, operation: "catalog.migrate.v5.begin")
+    do {
+      try execute(
+        """
+        CREATE TABLE develop_presets (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          schema_version INTEGER NOT NULL CHECK (schema_version > 0),
+          created_ms INTEGER NOT NULL,
+          updated_ms INTEGER NOT NULL,
+          operations_json BLOB NOT NULL,
+          virtual_copy_id TEXT REFERENCES virtual_copies(id) ON DELETE SET NULL
+        );
+        CREATE UNIQUE INDEX develop_presets_name_index
+          ON develop_presets(name COLLATE NOCASE);
+        CREATE INDEX develop_presets_updated_index
+          ON develop_presets(updated_ms DESC, id ASC);
+        PRAGMA user_version=5;
+        """,
+        database: database,
+        operation: "catalog.migrate.v5"
+      )
+      try execute("COMMIT;", database: database, operation: "catalog.migrate.v5.commit")
+    } catch let primaryError {
+      do {
+        try execute("ROLLBACK;", database: database, operation: "catalog.migrate.v5.rollback")
+      } catch let rollbackError {
+        throw CatalogStoreError.cleanup(
+          operation: "catalog.migrate.v5",
+          primaryError: String(describing: primaryError),
+          cleanupError: String(describing: rollbackError)
+        )
+      }
+      throw primaryError
+    }
+  }
+
+  private static func migrateToVersionSix(_ database: OpaquePointer) throws {
+    try execute("BEGIN IMMEDIATE;", database: database, operation: "catalog.migrate.v6.begin")
+    do {
+      try execute(
+        """
+        CREATE TABLE library_folders (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          parent_id TEXT REFERENCES library_folders(id) ON DELETE RESTRICT,
+          normalized_name TEXT NOT NULL,
+          created_ms INTEGER NOT NULL,
+          updated_ms INTEGER NOT NULL
+        );
+        CREATE UNIQUE INDEX library_folders_sibling_name_index
+          ON library_folders(COALESCE(parent_id, ''), normalized_name);
+        CREATE INDEX library_folders_parent_index ON library_folders(parent_id);
+        CREATE TABLE asset_folders (
+          asset_id TEXT PRIMARY KEY REFERENCES assets(id) ON DELETE CASCADE,
+          folder_id TEXT NOT NULL REFERENCES library_folders(id) ON DELETE RESTRICT
+        );
+        CREATE INDEX asset_folders_folder_index ON asset_folders(folder_id);
+        PRAGMA user_version=6;
+        """,
+        database: database,
+        operation: "catalog.migrate.v6"
+      )
+      try execute("COMMIT;", database: database, operation: "catalog.migrate.v6.commit")
+    } catch let primaryError {
+      do {
+        try execute("ROLLBACK;", database: database, operation: "catalog.migrate.v6.rollback")
+      } catch let rollbackError {
+        throw CatalogStoreError.cleanup(
+          operation: "catalog.migrate.v6",
+          primaryError: String(describing: primaryError),
+          cleanupError: String(describing: rollbackError)
+        )
+      }
+      throw primaryError
+    }
+  }
+
   private static func validateVersionTwoSchema(
     _ database: OpaquePointer,
     shouldUseFTS: Bool
@@ -2846,29 +3535,63 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
     let ftsAvailable = try validateVersionTwoSchema(database, shouldUseFTS: shouldUseFTS)
     let requiredColumns: [String: [SQLiteSchemaColumn]] = [
       "collections": [
-        .init(position: 0, name: "id", type: "TEXT", isNotNull: false, defaultValue: nil, primaryKeyPosition: 1),
-        .init(position: 1, name: "name", type: "TEXT", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
-        .init(position: 2, name: "kind", type: "TEXT", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
-        .init(position: 3, name: "created_ms", type: "INTEGER", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
-        .init(position: 4, name: "updated_ms", type: "INTEGER", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
-        .init(position: 5, name: "predicate_json", type: "BLOB", isNotNull: false, defaultValue: nil, primaryKeyPosition: 0),
+        .init(
+          position: 0, name: "id", type: "TEXT", isNotNull: false, defaultValue: nil,
+          primaryKeyPosition: 1),
+        .init(
+          position: 1, name: "name", type: "TEXT", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
+        .init(
+          position: 2, name: "kind", type: "TEXT", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
+        .init(
+          position: 3, name: "created_ms", type: "INTEGER", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
+        .init(
+          position: 4, name: "updated_ms", type: "INTEGER", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
+        .init(
+          position: 5, name: "predicate_json", type: "BLOB", isNotNull: false, defaultValue: nil,
+          primaryKeyPosition: 0),
       ],
       "collection_assets": [
-        .init(position: 0, name: "collection_id", type: "TEXT", isNotNull: true, defaultValue: nil, primaryKeyPosition: 1),
-        .init(position: 1, name: "asset_id", type: "TEXT", isNotNull: true, defaultValue: nil, primaryKeyPosition: 2),
-        .init(position: 2, name: "position", type: "INTEGER", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
+        .init(
+          position: 0, name: "collection_id", type: "TEXT", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 1),
+        .init(
+          position: 1, name: "asset_id", type: "TEXT", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 2),
+        .init(
+          position: 2, name: "position", type: "INTEGER", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
       ],
       "photo_stacks": [
-        .init(position: 0, name: "id", type: "TEXT", isNotNull: false, defaultValue: nil, primaryKeyPosition: 1),
-        .init(position: 1, name: "representative_asset_id", type: "TEXT", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
-        .init(position: 2, name: "is_collapsed", type: "INTEGER", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
-        .init(position: 3, name: "created_ms", type: "INTEGER", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
-        .init(position: 4, name: "updated_ms", type: "INTEGER", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
+        .init(
+          position: 0, name: "id", type: "TEXT", isNotNull: false, defaultValue: nil,
+          primaryKeyPosition: 1),
+        .init(
+          position: 1, name: "representative_asset_id", type: "TEXT", isNotNull: true,
+          defaultValue: nil, primaryKeyPosition: 0),
+        .init(
+          position: 2, name: "is_collapsed", type: "INTEGER", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
+        .init(
+          position: 3, name: "created_ms", type: "INTEGER", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
+        .init(
+          position: 4, name: "updated_ms", type: "INTEGER", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
       ],
       "stack_assets": [
-        .init(position: 0, name: "stack_id", type: "TEXT", isNotNull: true, defaultValue: nil, primaryKeyPosition: 1),
-        .init(position: 1, name: "asset_id", type: "TEXT", isNotNull: true, defaultValue: nil, primaryKeyPosition: 2),
-        .init(position: 2, name: "position", type: "INTEGER", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
+        .init(
+          position: 0, name: "stack_id", type: "TEXT", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 1),
+        .init(
+          position: 1, name: "asset_id", type: "TEXT", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 2),
+        .init(
+          position: 2, name: "position", type: "INTEGER", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
       ],
     ]
     for (table, expected) in requiredColumns {
@@ -2881,48 +3604,51 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
     }
     let tableSQL: [String: String] = [
       "collections": """
-        CREATE TABLE collections (
-          id TEXT PRIMARY KEY,
-          name TEXT NOT NULL,
-          kind TEXT NOT NULL CHECK (kind IN ('regular', 'smart')),
-          created_ms INTEGER NOT NULL,
-          updated_ms INTEGER NOT NULL,
-          predicate_json BLOB
-        )
-        """,
+      CREATE TABLE collections (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('regular', 'smart')),
+        created_ms INTEGER NOT NULL,
+        updated_ms INTEGER NOT NULL,
+        predicate_json BLOB
+      )
+      """,
       "collection_assets": """
-        CREATE TABLE collection_assets (
-          collection_id TEXT NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
-          asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
-          position INTEGER NOT NULL CHECK (position >= 0),
-          PRIMARY KEY (collection_id, asset_id)
-        )
-        """,
+      CREATE TABLE collection_assets (
+        collection_id TEXT NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+        asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+        position INTEGER NOT NULL CHECK (position >= 0),
+        PRIMARY KEY (collection_id, asset_id)
+      )
+      """,
       "photo_stacks": """
-        CREATE TABLE photo_stacks (
-          id TEXT PRIMARY KEY,
-          representative_asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
-          is_collapsed INTEGER NOT NULL CHECK (is_collapsed IN (0, 1)),
-          created_ms INTEGER NOT NULL,
-          updated_ms INTEGER NOT NULL
-        )
-        """,
+      CREATE TABLE photo_stacks (
+        id TEXT PRIMARY KEY,
+        representative_asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+        is_collapsed INTEGER NOT NULL CHECK (is_collapsed IN (0, 1)),
+        created_ms INTEGER NOT NULL,
+        updated_ms INTEGER NOT NULL
+      )
+      """,
       "stack_assets": """
-        CREATE TABLE stack_assets (
-          stack_id TEXT NOT NULL REFERENCES photo_stacks(id) ON DELETE CASCADE,
-          asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
-          position INTEGER NOT NULL CHECK (position >= 0),
-          PRIMARY KEY (stack_id, asset_id)
-        )
-        """,
+      CREATE TABLE stack_assets (
+        stack_id TEXT NOT NULL REFERENCES photo_stacks(id) ON DELETE CASCADE,
+        asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+        position INTEGER NOT NULL CHECK (position >= 0),
+        PRIMARY KEY (stack_id, asset_id)
+      )
+      """,
     ]
     for (table, expectedSQL) in tableSQL {
       try validateSchemaSQL(database, object: table, type: "table", expectedSQL: expectedSQL)
     }
     let indexes: [String: String] = [
-      "collections_name_index": "CREATE UNIQUE INDEX collections_name_index ON collections(name COLLATE NOCASE)",
-      "collection_assets_order_index": "CREATE INDEX collection_assets_order_index ON collection_assets(collection_id, position)",
-      "stack_assets_order_index": "CREATE INDEX stack_assets_order_index ON stack_assets(stack_id, position)",
+      "collections_name_index":
+        "CREATE UNIQUE INDEX collections_name_index ON collections(name COLLATE NOCASE)",
+      "collection_assets_order_index":
+        "CREATE INDEX collection_assets_order_index ON collection_assets(collection_id, position)",
+      "stack_assets_order_index":
+        "CREATE INDEX stack_assets_order_index ON stack_assets(stack_id, position)",
     ]
     for (index, expectedSQL) in indexes {
       try validateSchemaSQL(database, object: index, type: "index", expectedSQL: expectedSQL)
@@ -2956,29 +3682,63 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
     let ftsAvailable = try validateVersionThreeSchema(database, shouldUseFTS: shouldUseFTS)
     let requiredColumns: [String: [SQLiteSchemaColumn]] = [
       "keyword_nodes": [
-        .init(position: 0, name: "id", type: "TEXT", isNotNull: false, defaultValue: nil, primaryKeyPosition: 1),
-        .init(position: 1, name: "name", type: "TEXT", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
-        .init(position: 2, name: "parent_id", type: "TEXT", isNotNull: false, defaultValue: nil, primaryKeyPosition: 0),
-        .init(position: 3, name: "normalized_name", type: "TEXT", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
-        .init(position: 4, name: "created_ms", type: "INTEGER", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
-        .init(position: 5, name: "updated_ms", type: "INTEGER", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
+        .init(
+          position: 0, name: "id", type: "TEXT", isNotNull: false, defaultValue: nil,
+          primaryKeyPosition: 1),
+        .init(
+          position: 1, name: "name", type: "TEXT", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
+        .init(
+          position: 2, name: "parent_id", type: "TEXT", isNotNull: false, defaultValue: nil,
+          primaryKeyPosition: 0),
+        .init(
+          position: 3, name: "normalized_name", type: "TEXT", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
+        .init(
+          position: 4, name: "created_ms", type: "INTEGER", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
+        .init(
+          position: 5, name: "updated_ms", type: "INTEGER", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
       ],
       "asset_keyword_nodes": [
-        .init(position: 0, name: "asset_id", type: "TEXT", isNotNull: true, defaultValue: nil, primaryKeyPosition: 1),
-        .init(position: 1, name: "keyword_id", type: "TEXT", isNotNull: true, defaultValue: nil, primaryKeyPosition: 2),
+        .init(
+          position: 0, name: "asset_id", type: "TEXT", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 1),
+        .init(
+          position: 1, name: "keyword_id", type: "TEXT", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 2),
       ],
       "virtual_copies": [
-        .init(position: 0, name: "id", type: "TEXT", isNotNull: false, defaultValue: nil, primaryKeyPosition: 1),
-        .init(position: 1, name: "source_asset_id", type: "TEXT", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
-        .init(position: 2, name: "name", type: "TEXT", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
-        .init(position: 3, name: "created_ms", type: "INTEGER", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
-        .init(position: 4, name: "updated_ms", type: "INTEGER", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
+        .init(
+          position: 0, name: "id", type: "TEXT", isNotNull: false, defaultValue: nil,
+          primaryKeyPosition: 1),
+        .init(
+          position: 1, name: "source_asset_id", type: "TEXT", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
+        .init(
+          position: 2, name: "name", type: "TEXT", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
+        .init(
+          position: 3, name: "created_ms", type: "INTEGER", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
+        .init(
+          position: 4, name: "updated_ms", type: "INTEGER", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
       ],
       "virtual_copy_recipes": [
-        .init(position: 0, name: "virtual_copy_id", type: "TEXT", isNotNull: true, defaultValue: nil, primaryKeyPosition: 1),
-        .init(position: 1, name: "revision", type: "INTEGER", isNotNull: true, defaultValue: nil, primaryKeyPosition: 2),
-        .init(position: 2, name: "date_ms", type: "INTEGER", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
-        .init(position: 3, name: "recipe_json", type: "BLOB", isNotNull: true, defaultValue: nil, primaryKeyPosition: 0),
+        .init(
+          position: 0, name: "virtual_copy_id", type: "TEXT", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 1),
+        .init(
+          position: 1, name: "revision", type: "INTEGER", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 2),
+        .init(
+          position: 2, name: "date_ms", type: "INTEGER", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
+        .init(
+          position: 3, name: "recipe_json", type: "BLOB", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
       ],
     ]
     for (table, expected) in requiredColumns {
@@ -2991,50 +3751,55 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
     }
     let tableSQL: [String: String] = [
       "keyword_nodes": """
-        CREATE TABLE keyword_nodes (
-          id TEXT PRIMARY KEY,
-          name TEXT NOT NULL,
-          parent_id TEXT REFERENCES keyword_nodes(id) ON DELETE RESTRICT,
-          normalized_name TEXT NOT NULL,
-          created_ms INTEGER NOT NULL,
-          updated_ms INTEGER NOT NULL
-        )
-        """,
+      CREATE TABLE keyword_nodes (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        parent_id TEXT REFERENCES keyword_nodes(id) ON DELETE RESTRICT,
+        normalized_name TEXT NOT NULL,
+        created_ms INTEGER NOT NULL,
+        updated_ms INTEGER NOT NULL
+      )
+      """,
       "asset_keyword_nodes": """
-        CREATE TABLE asset_keyword_nodes (
-          asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
-          keyword_id TEXT NOT NULL REFERENCES keyword_nodes(id) ON DELETE CASCADE,
-          PRIMARY KEY (asset_id, keyword_id)
-        )
-        """,
+      CREATE TABLE asset_keyword_nodes (
+        asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+        keyword_id TEXT NOT NULL REFERENCES keyword_nodes(id) ON DELETE CASCADE,
+        PRIMARY KEY (asset_id, keyword_id)
+      )
+      """,
       "virtual_copies": """
-        CREATE TABLE virtual_copies (
-          id TEXT PRIMARY KEY,
-          source_asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
-          name TEXT NOT NULL,
-          created_ms INTEGER NOT NULL,
-          updated_ms INTEGER NOT NULL
-        )
-        """,
+      CREATE TABLE virtual_copies (
+        id TEXT PRIMARY KEY,
+        source_asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        created_ms INTEGER NOT NULL,
+        updated_ms INTEGER NOT NULL
+      )
+      """,
       "virtual_copy_recipes": """
-        CREATE TABLE virtual_copy_recipes (
-          virtual_copy_id TEXT NOT NULL REFERENCES virtual_copies(id) ON DELETE CASCADE,
-          revision INTEGER NOT NULL,
-          date_ms INTEGER NOT NULL,
-          recipe_json BLOB NOT NULL,
-          PRIMARY KEY (virtual_copy_id, revision)
-        )
-        """,
+      CREATE TABLE virtual_copy_recipes (
+        virtual_copy_id TEXT NOT NULL REFERENCES virtual_copies(id) ON DELETE CASCADE,
+        revision INTEGER NOT NULL,
+        date_ms INTEGER NOT NULL,
+        recipe_json BLOB NOT NULL,
+        PRIMARY KEY (virtual_copy_id, revision)
+      )
+      """,
     ]
     for (table, expectedSQL) in tableSQL {
       try validateSchemaSQL(database, object: table, type: "table", expectedSQL: expectedSQL)
     }
     let indexes: [String: String] = [
-      "keyword_nodes_sibling_name_index": "CREATE UNIQUE INDEX keyword_nodes_sibling_name_index ON keyword_nodes(COALESCE(parent_id, ''), normalized_name)",
-      "keyword_nodes_parent_index": "CREATE INDEX keyword_nodes_parent_index ON keyword_nodes(parent_id)",
-      "asset_keyword_nodes_keyword_index": "CREATE INDEX asset_keyword_nodes_keyword_index ON asset_keyword_nodes(keyword_id)",
-      "virtual_copies_source_name_index": "CREATE UNIQUE INDEX virtual_copies_source_name_index ON virtual_copies(source_asset_id, name COLLATE NOCASE)",
-      "virtual_copy_recipes_latest_index": "CREATE INDEX virtual_copy_recipes_latest_index ON virtual_copy_recipes(virtual_copy_id, revision DESC, date_ms DESC)",
+      "keyword_nodes_sibling_name_index":
+        "CREATE UNIQUE INDEX keyword_nodes_sibling_name_index ON keyword_nodes(COALESCE(parent_id, ''), normalized_name)",
+      "keyword_nodes_parent_index":
+        "CREATE INDEX keyword_nodes_parent_index ON keyword_nodes(parent_id)",
+      "asset_keyword_nodes_keyword_index":
+        "CREATE INDEX asset_keyword_nodes_keyword_index ON asset_keyword_nodes(keyword_id)",
+      "virtual_copies_source_name_index":
+        "CREATE UNIQUE INDEX virtual_copies_source_name_index ON virtual_copies(source_asset_id, name COLLATE NOCASE)",
+      "virtual_copy_recipes_latest_index":
+        "CREATE INDEX virtual_copy_recipes_latest_index ON virtual_copy_recipes(virtual_copy_id, revision DESC, date_ms DESC)",
     ]
     for (index, expectedSQL) in indexes {
       try validateSchemaSQL(database, object: index, type: "index", expectedSQL: expectedSQL)
@@ -3049,11 +3814,13 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
     try validateForeignKey(
       database, table: "asset_keyword_nodes", column: "asset_id", referencedTable: "assets")
     try validateForeignKey(
-      database, table: "asset_keyword_nodes", column: "keyword_id", referencedTable: "keyword_nodes")
+      database, table: "asset_keyword_nodes", column: "keyword_id", referencedTable: "keyword_nodes"
+    )
     try validateForeignKey(
       database, table: "virtual_copies", column: "source_asset_id", referencedTable: "assets")
     try validateForeignKey(
-      database, table: "virtual_copy_recipes", column: "virtual_copy_id", referencedTable: "virtual_copies")
+      database, table: "virtual_copy_recipes", column: "virtual_copy_id",
+      referencedTable: "virtual_copies")
     let queries = [
       "SELECT id, name, parent_id, normalized_name, created_ms, updated_ms FROM keyword_nodes WHERE id = ?;",
       "SELECT keyword_id FROM asset_keyword_nodes WHERE asset_id = ? ORDER BY keyword_id ASC;",
@@ -3061,6 +3828,191 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
       "SELECT recipe_json FROM virtual_copy_recipes WHERE virtual_copy_id = ? ORDER BY revision DESC, date_ms DESC LIMIT 1;",
     ]
     for query in queries {
+      try validateQuery(database, sql: query)
+    }
+    return ftsAvailable
+  }
+
+  private static func validateVersionFiveSchema(
+    _ database: OpaquePointer,
+    shouldUseFTS: Bool
+  ) throws -> Bool {
+    let ftsAvailable = try validateVersionFourSchema(database, shouldUseFTS: shouldUseFTS)
+    let requiredColumns: [SQLiteSchemaColumn] = [
+      .init(
+        position: 0, name: "id", type: "TEXT", isNotNull: false, defaultValue: nil,
+        primaryKeyPosition: 1),
+      .init(
+        position: 1, name: "name", type: "TEXT", isNotNull: true, defaultValue: nil,
+        primaryKeyPosition: 0),
+      .init(
+        position: 2, name: "schema_version", type: "INTEGER", isNotNull: true, defaultValue: nil,
+        primaryKeyPosition: 0),
+      .init(
+        position: 3, name: "created_ms", type: "INTEGER", isNotNull: true, defaultValue: nil,
+        primaryKeyPosition: 0),
+      .init(
+        position: 4, name: "updated_ms", type: "INTEGER", isNotNull: true, defaultValue: nil,
+        primaryKeyPosition: 0),
+      .init(
+        position: 5, name: "operations_json", type: "BLOB", isNotNull: true, defaultValue: nil,
+        primaryKeyPosition: 0),
+      .init(
+        position: 6, name: "virtual_copy_id", type: "TEXT", isNotNull: false, defaultValue: nil,
+        primaryKeyPosition: 0),
+    ]
+    guard try tableExists(database, name: "develop_presets") else {
+      throw schemaError("The required table 'develop_presets' is missing.")
+    }
+    guard try tableColumns(database, table: "develop_presets") == requiredColumns else {
+      throw schemaError("The table 'develop_presets' does not have the exact version-5 columns.")
+    }
+    try validateSchemaSQL(
+      database,
+      object: "develop_presets",
+      type: "table",
+      expectedSQL: """
+        CREATE TABLE develop_presets (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          schema_version INTEGER NOT NULL CHECK (schema_version > 0),
+          created_ms INTEGER NOT NULL,
+          updated_ms INTEGER NOT NULL,
+          operations_json BLOB NOT NULL,
+          virtual_copy_id TEXT REFERENCES virtual_copies(id) ON DELETE SET NULL
+        )
+        """
+    )
+    try validateSchemaSQL(
+      database,
+      object: "develop_presets_name_index",
+      type: "index",
+      expectedSQL:
+        "CREATE UNIQUE INDEX develop_presets_name_index ON develop_presets(name COLLATE NOCASE)"
+    )
+    try validateSchemaSQL(
+      database,
+      object: "develop_presets_updated_index",
+      type: "index",
+      expectedSQL:
+        "CREATE INDEX develop_presets_updated_index ON develop_presets(updated_ms DESC, id ASC)"
+    )
+    try validateForeignKey(
+      database,
+      table: "develop_presets",
+      column: "virtual_copy_id",
+      referencedTable: "virtual_copies",
+      deleteAction: "SET NULL"
+    )
+    try validateQuery(
+      database,
+      sql:
+        "SELECT id, name, schema_version, created_ms, updated_ms, operations_json, virtual_copy_id FROM develop_presets WHERE id = ?;"
+    )
+    return ftsAvailable
+  }
+
+  private static func validateVersionSixSchema(
+    _ database: OpaquePointer,
+    shouldUseFTS: Bool
+  ) throws -> Bool {
+    let ftsAvailable = try validateVersionFiveSchema(database, shouldUseFTS: shouldUseFTS)
+    let requiredColumns: [String: [SQLiteSchemaColumn]] = [
+      "library_folders": [
+        .init(
+          position: 0, name: "id", type: "TEXT", isNotNull: false, defaultValue: nil,
+          primaryKeyPosition: 1),
+        .init(
+          position: 1, name: "name", type: "TEXT", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
+        .init(
+          position: 2, name: "parent_id", type: "TEXT", isNotNull: false, defaultValue: nil,
+          primaryKeyPosition: 0),
+        .init(
+          position: 3, name: "normalized_name", type: "TEXT", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
+        .init(
+          position: 4, name: "created_ms", type: "INTEGER", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
+        .init(
+          position: 5, name: "updated_ms", type: "INTEGER", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
+      ],
+      "asset_folders": [
+        .init(
+          position: 0, name: "asset_id", type: "TEXT", isNotNull: false, defaultValue: nil,
+          primaryKeyPosition: 1),
+        .init(
+          position: 1, name: "folder_id", type: "TEXT", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
+      ],
+    ]
+    let tableSQL: [String: String] = [
+      "library_folders": """
+      CREATE TABLE library_folders (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        parent_id TEXT REFERENCES library_folders(id) ON DELETE RESTRICT,
+        normalized_name TEXT NOT NULL,
+        created_ms INTEGER NOT NULL,
+        updated_ms INTEGER NOT NULL
+      )
+      """,
+      "asset_folders": """
+      CREATE TABLE asset_folders (
+        asset_id TEXT PRIMARY KEY REFERENCES assets(id) ON DELETE CASCADE,
+        folder_id TEXT NOT NULL REFERENCES library_folders(id) ON DELETE RESTRICT
+      )
+      """,
+    ]
+    for (table, expected) in requiredColumns {
+      guard try tableExists(database, name: table) else {
+        throw schemaError("The required table '\(table)' is missing.")
+      }
+      guard try tableColumns(database, table: table) == expected else {
+        throw schemaError("The table '\(table)' does not have the exact version-6 columns.")
+      }
+      try validateSchemaSQL(database, object: table, type: "table", expectedSQL: tableSQL[table]!)
+    }
+    let indexes = [
+      (
+        "library_folders_sibling_name_index",
+        "CREATE UNIQUE INDEX library_folders_sibling_name_index ON library_folders(COALESCE(parent_id, ''), normalized_name)"
+      ),
+      (
+        "library_folders_parent_index",
+        "CREATE INDEX library_folders_parent_index ON library_folders(parent_id)"
+      ),
+      (
+        "asset_folders_folder_index",
+        "CREATE INDEX asset_folders_folder_index ON asset_folders(folder_id)"
+      ),
+    ]
+    for (index, expectedSQL) in indexes {
+      try validateSchemaSQL(database, object: index, type: "index", expectedSQL: expectedSQL)
+    }
+    try validateForeignKey(
+      database,
+      table: "library_folders",
+      column: "parent_id",
+      referencedTable: "library_folders",
+      deleteAction: "RESTRICT"
+    )
+    try validateForeignKey(
+      database, table: "asset_folders", column: "asset_id", referencedTable: "assets"
+    )
+    try validateForeignKey(
+      database,
+      table: "asset_folders",
+      column: "folder_id",
+      referencedTable: "library_folders",
+      deleteAction: "RESTRICT"
+    )
+    for query in [
+      "SELECT id, name, parent_id, normalized_name, created_ms, updated_ms FROM library_folders WHERE id = ?;",
+      "SELECT folder_id FROM asset_folders WHERE asset_id = ?;",
+      "SELECT asset_id FROM asset_folders WHERE folder_id = ? ORDER BY asset_id ASC;",
+    ] {
       try validateQuery(database, sql: query)
     }
     return ftsAvailable
@@ -3465,7 +4417,9 @@ public actor SQLiteCatalogStore: CatalogStore, MetadataCatalogStore, LibraryCata
         let target = sqlite3_column_text(statement, 2).map { String(cString: $0) }
         let source = sqlite3_column_text(statement, 3).map { String(cString: $0) }
         let actualDeleteAction = sqlite3_column_text(statement, 6).map { String(cString: $0) }
-        if source == column && target == referencedTable && actualDeleteAction == deleteAction { return }
+        if source == column && target == referencedTable && actualDeleteAction == deleteAction {
+          return
+        }
       }
       throw schemaError("The table '\(table)' does not have the required cascading foreign key.")
     }

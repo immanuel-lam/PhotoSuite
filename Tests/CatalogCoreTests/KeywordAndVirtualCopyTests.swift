@@ -126,7 +126,7 @@ final class KeywordAndVirtualCopyTests: XCTestCase {
     try await store.close()
     let database = try openDatabase(catalogURL)
     defer { sqlite3_close_v2(database) }
-    XCTAssertEqual(try scalarInt(database, "PRAGMA user_version;"), 4)
+    XCTAssertEqual(try scalarInt(database, "PRAGMA user_version;"), 6)
     XCTAssertEqual(
       try scalarInt(
         database,

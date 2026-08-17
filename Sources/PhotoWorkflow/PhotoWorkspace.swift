@@ -36,12 +36,16 @@ public final class PhotoWorkspace {
   public var stacks: [LibraryStack] = []
   public var durableCollections: [PhotoCollection] = []
   public var durableStacks: [PhotoStack] = []
+  public var folders: [LibraryFolder] = []
+  public var folderAssetIDs: [UUID: Set<UUID>] = [:]
   public var keywordNodes: [KeywordNode] = []
   public var selectedAssetKeywords: [KeywordNode] = []
   public var virtualCopies: [VirtualCopy] = []
   public var selectedVirtualCopyID: UUID?
+  public var developPresets: [DevelopPreset] = []
   public var smartFilter = LibrarySmartFilter()
   public var activeCollectionID: UUID?
+  public var activeFolderID: UUID?
   public var deliverOptions = DeliverOptions()
   public var professionalTool: ProfessionalTool = .map
   public var photoLocations: [PhotoLocation] = []
@@ -100,6 +104,15 @@ public final class PhotoWorkspace {
         collectionFilter = { _ in false }
       }
     }
+    var folderFilter: ((PhotoAsset) -> Bool)?
+    if let folderID = activeFolderID {
+      let descendantIDs = Set(folderIDs(including: folderID))
+      let assetIDs = folderAssetIDs.reduce(into: Set<UUID>()) { result, entry in
+        guard descendantIDs.contains(entry.key) else { return }
+        result.formUnion(entry.value)
+      }
+      folderFilter = { assetIDs.contains($0.id) }
+    }
     return assets.filter { asset in
       if !searchText.isEmpty,
         !asset.filename.localizedCaseInsensitiveContains(searchText)
@@ -107,6 +120,7 @@ public final class PhotoWorkspace {
         return false
       }
       if let collectionFilter, !collectionFilter(asset) { return false }
+      if let folderFilter, !folderFilter(asset) { return false }
       return smartFilter.matches(asset)
     }
   }
@@ -186,10 +200,14 @@ public final class PhotoWorkspace {
       preview = nil
       durableCollections = []
       durableStacks = []
+      folders = []
+      folderAssetIDs = [:]
+      activeFolderID = nil
       keywordNodes = []
       selectedAssetKeywords = []
       virtualCopies = []
       selectedVirtualCopyID = nil
+      developPresets = []
 
       if let libraryCatalog = catalog as? any LibraryCatalogStore {
         do {
@@ -205,6 +223,21 @@ public final class PhotoWorkspace {
           virtualCopies = try await libraryCatalog.listVirtualCopies(
             CatalogVirtualCopyListRequest()
           ).virtualCopies
+          developPresets = try await libraryCatalog.listDevelopPresets(
+            CatalogDevelopPresetListRequest()
+          ).presets
+          for folder in try await libraryCatalog.listFolders(CatalogFolderListRequest()).folders {
+            folders.append(folder)
+            do {
+              folderAssetIDs[folder.id] = Set(
+                try await libraryCatalog.listFolderAssets(
+                  CatalogFolderAssetsRequest(folderID: folder.id)
+                ).assets.map(\.id)
+              )
+            } catch {
+              record(error, operation: "library.folder.assets")
+            }
+          }
         } catch {
           record(error, operation: "library.reopen")
         }
@@ -461,6 +494,224 @@ public final class PhotoWorkspace {
       await refreshPreview()
     } catch {
       record(error, operation: "select")
+    }
+  }
+
+  /// Returns the selected folder path, including all durable ancestors.
+  public func folderPath(for folder: LibraryFolder) -> String {
+    var names = [folder.name]
+    var parentID = folder.parentID
+    var visited: Set<UUID> = [folder.id]
+    while let id = parentID, visited.insert(id).inserted,
+      let parent = folders.first(where: { $0.id == id })
+    {
+      names.append(parent.name)
+      parentID = parent.parentID
+    }
+    return names.reversed().joined(separator: " › ")
+  }
+
+  public func folderIDs(including folderID: UUID) -> [UUID] {
+    var result = [folderID]
+    var pending = [folderID]
+    while let parentID = pending.popLast() {
+      let children = folders.filter { $0.parentID == parentID }.map(\.id)
+      result.append(contentsOf: children)
+      pending.append(contentsOf: children)
+    }
+    return result
+  }
+
+  public func selectFolder(_ folderID: UUID?) {
+    guard let folderID else {
+      activeFolderID = nil
+      return
+    }
+    guard folders.contains(where: { $0.id == folderID }) else {
+      record(
+        PhotoWorkspaceError.operationFailed(
+          operation: "library.folder.select",
+          message: "The folder is not available in this catalog."
+        ),
+        operation: "library.folder.select"
+      )
+      return
+    }
+    activeFolderID = folderID
+    activeCollectionID = nil
+  }
+
+  public func createDurableFolder(named name: String, parentID: UUID? = nil) async {
+    guard let libraryCatalog = catalog as? any LibraryCatalogStore else {
+      record(PhotoWorkspaceError.libraryStoreUnavailable, operation: "library.folder.create")
+      return
+    }
+    guard let folder = LibraryFolder(name: name, parentID: parentID) else {
+      record(
+        PhotoWorkspaceError.operationFailed(
+          operation: "library.folder.create",
+          message: "The folder name or parent relationship is not valid."
+        ),
+        operation: "library.folder.create"
+      )
+      return
+    }
+    do {
+      let saved = try await libraryCatalog.saveFolder(
+        CatalogFolderSaveRequest(folder: folder)
+      ).folder
+      folders.append(saved)
+      folders.sort {
+        folderPath(for: $0).localizedCaseInsensitiveCompare(folderPath(for: $1))
+          == .orderedAscending
+      }
+      folderAssetIDs[saved.id] = []
+      lastError = nil
+      errorMessage = nil
+    } catch {
+      record(error, operation: "library.folder.create")
+    }
+  }
+
+  public func deleteDurableFolder(_ folderID: UUID) async {
+    guard let libraryCatalog = catalog as? any LibraryCatalogStore else {
+      record(PhotoWorkspaceError.libraryStoreUnavailable, operation: "library.folder.delete")
+      return
+    }
+    do {
+      _ = try await libraryCatalog.deleteFolder(CatalogFolderDeleteRequest(folderID: folderID))
+      folders.removeAll { $0.id == folderID }
+      folderAssetIDs.removeValue(forKey: folderID)
+      if activeFolderID == folderID { activeFolderID = nil }
+      lastError = nil
+      errorMessage = nil
+    } catch {
+      record(error, operation: "library.folder.delete")
+    }
+  }
+
+  public func assignAsset(_ assetID: UUID, toFolder folderID: UUID?) async {
+    guard assets.contains(where: { $0.id == assetID }) else {
+      record(PhotoWorkspaceError.invalidSelection(assetID), operation: "library.folder.assign")
+      return
+    }
+    guard let libraryCatalog = catalog as? any LibraryCatalogStore else {
+      record(PhotoWorkspaceError.libraryStoreUnavailable, operation: "library.folder.assign")
+      return
+    }
+    do {
+      _ = try await libraryCatalog.setAssetFolder(
+        CatalogAssetFolderSetRequest(assetID: assetID, folderID: folderID)
+      )
+      for key in folderAssetIDs.keys {
+        folderAssetIDs[key]?.remove(assetID)
+      }
+      if let folderID {
+        folderAssetIDs[folderID, default: []].insert(assetID)
+      }
+      lastError = nil
+      errorMessage = nil
+    } catch {
+      record(error, operation: "library.folder.assign")
+    }
+  }
+
+  /// Saves the selected recipe's Develop operations as a durable preset.
+  public func saveDevelopPreset(named name: String) async {
+    guard let recipe = currentRecipe else {
+      record(
+        PhotoWorkspaceError.noSelection(operation: "develop.preset.save"),
+        operation: "develop.preset.save"
+      )
+      return
+    }
+    guard let libraryCatalog = catalog as? any LibraryCatalogStore else {
+      record(PhotoWorkspaceError.libraryStoreUnavailable, operation: "develop.preset.save")
+      return
+    }
+    let operations = recipe.operations.filter { operation in
+      if Self.developFamily(operation) != nil { return true }
+      if case .unknown = operation { return true }
+      return false
+    }
+    guard
+      let preset = DevelopPreset(
+        name: name,
+        operations: operations,
+        virtualCopyID: selectedVirtualCopyID,
+        createdAt: now(),
+        updatedAt: now()
+      )
+    else {
+      record(
+        PhotoWorkspaceError.operationFailed(
+          operation: "develop.preset.save",
+          message: "The preset name or operation stream is invalid."
+        ),
+        operation: "develop.preset.save"
+      )
+      return
+    }
+    do {
+      let saved = try await libraryCatalog.saveDevelopPreset(
+        CatalogDevelopPresetSaveRequest(preset: preset)
+      ).preset
+      developPresets.removeAll { $0.id == saved.id }
+      developPresets.append(saved)
+      lastError = nil
+      errorMessage = nil
+    } catch {
+      record(error, operation: "develop.preset.save")
+    }
+  }
+
+  /// Applies a durable Develop preset to the selected asset or virtual copy.
+  public func applyDevelopPreset(_ presetID: UUID) async {
+    guard let assetID = selectedAssetID else {
+      record(
+        PhotoWorkspaceError.noSelection(operation: "develop.preset.apply"),
+        operation: "develop.preset.apply"
+      )
+      return
+    }
+    guard let libraryCatalog = catalog as? any LibraryCatalogStore else {
+      record(PhotoWorkspaceError.libraryStoreUnavailable, operation: "develop.preset.apply")
+      return
+    }
+    do {
+      let result = try await libraryCatalog.applyDevelopPreset(
+        CatalogApplyDevelopPresetRequest(
+          assetID: assetID,
+          presetID: presetID,
+          virtualCopyID: selectedVirtualCopyID
+        )
+      ).recipe
+      currentRecipe = result
+      selectedVirtualCopyID = result.virtualCopyID
+      resetHistory()
+      syncDraftValues()
+      await refreshPreview()
+      lastError = nil
+      errorMessage = nil
+    } catch {
+      record(error, operation: "develop.preset.apply")
+    }
+  }
+
+  public func deleteDevelopPreset(_ presetID: UUID) async {
+    guard let libraryCatalog = catalog as? any LibraryCatalogStore else {
+      record(PhotoWorkspaceError.libraryStoreUnavailable, operation: "develop.preset.delete")
+      return
+    }
+    do {
+      _ = try await libraryCatalog.deleteDevelopPreset(
+        CatalogDevelopPresetDeleteRequest(presetID: presetID)
+      )
+      developPresets.removeAll { $0.id == presetID }
+      lastError = nil
+      errorMessage = nil
+    } catch {
+      record(error, operation: "develop.preset.delete")
     }
   }
 

@@ -44,9 +44,9 @@ the histogram and three-way colour grade, author versioned masks, edit
 catalog metadata, and write JPEG, PNG, HEIF, or TIFF output through Deliver.
 Durable regular and smart collections plus photo stacks load from the catalog and
 can be created from the Library sidebar. Durable hierarchical keyword nodes and
-asset assignments, plus independent virtual-copy recipe history, are stored in
-the catalog and covered by migration and reopen tests. Session collections remain
-temporary.
+asset assignments, folder hierarchy and asset assignments, durable Develop presets,
+plus independent virtual-copy recipe history, are stored in the catalog and covered
+by migration and reopen tests. Session collections remain temporary.
 The baseline controls and mask contracts are pre-alpha workflow evidence;
 they are not a Lightroom-equivalent implementation.
 
@@ -68,10 +68,12 @@ LibRaw fallback, and complete DNG encoding remain incomplete. Physical tethered 
 vendor camera SDK adapters, print templates and soft proofing, hosted
 publishing, plug-in hosting, Adobe migration, AI features beyond the
 verified Vision subset, texture-aware retouching, and production support for
-the full range of Lightroom formats remain incomplete. Batch metadata editing,
-embedded/sidecar XMP writing, complete keyword-taxonomy authoring, and full
-virtual-copy batch/export workflow support are also incomplete. Cloud services, mobile
-clients, and web editing are out of scope. There is no signed, notarized,
+the full range of Lightroom formats remain incomplete. Embedded XMP writing, full
+metadata batch editing, complete keyword-taxonomy authoring, face workflows, and
+full virtual-copy batch/export workflow support are also incomplete. An atomic XMP
+sidecar writer/reader exists as a tested interoperability core, but it is not yet a
+complete metadata workflow. Cloud services, mobile clients, and web editing are out
+of scope. There is no signed, notarized,
 reproducible, or published application release. Do not use this pre-alpha
 revision for production photographs.
 

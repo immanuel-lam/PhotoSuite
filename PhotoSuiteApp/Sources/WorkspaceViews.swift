@@ -78,6 +78,11 @@ struct WorkspaceSidebar: View {
         .buttonStyle(.plain)
         .font(.callout)
 
+        if workspace.supportsDurableLibrary {
+          LibraryFolderControls(workspace: workspace)
+            .padding(.top, 4)
+        }
+
         HStack {
           Text("COLLECTIONS")
             .font(.caption2.weight(.semibold))
@@ -295,6 +300,9 @@ struct WorkspaceSidebar: View {
             Text("\(dimensions.width) × \(dimensions.height)")
               .font(.caption)
               .foregroundStyle(.secondary)
+          }
+          if workspace.supportsDurableLibrary {
+            LibraryFolderAssignmentControls(workspace: workspace, asset: asset)
           }
           LibraryMetadataControls(workspace: workspace, asset: asset)
           LibraryKeywordControls(workspace: workspace, asset: asset)

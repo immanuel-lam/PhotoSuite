@@ -836,6 +836,54 @@ final class PhotoWorkspaceTests: XCTestCase {
     XCTAssertEqual(workspace.filteredAssets.map(\.id), [asset.id])
   }
 
+  func testReopenLoadsDurableFolderTreeFiltersDescendantsAndAssignsWithoutSourceMutation()
+    async throws
+  {
+    let root = try XCTUnwrap(LibraryFolder(name: "2026"))
+    let child = try XCTUnwrap(LibraryFolder(name: "Sydney", parentID: root.id))
+    let asset = makeAsset(name: "foldered.jpg")
+    let other = makeAsset(name: "other-folder.jpg")
+    let catalog = CatalogSpy(
+      assets: [asset, other],
+      recipes: [
+        asset.id: makeRecipe(assetID: asset.id),
+        other.id: makeRecipe(assetID: other.id),
+      ],
+      folders: [root, child],
+      assetFolders: [asset.id: child.id]
+    )
+    let workspace = makeWorkspace(catalog: catalog)
+
+    await workspace.reopen()
+
+    XCTAssertEqual(workspace.folders, [root, child])
+    workspace.selectFolder(root.id)
+    XCTAssertEqual(workspace.filteredAssets.map(\.id), [asset.id])
+    await workspace.assignAsset(other.id, toFolder: root.id)
+    XCTAssertEqual(Set(workspace.filteredAssets.map(\.id)), Set([asset.id, other.id]))
+    await workspace.assignAsset(asset.id, toFolder: nil)
+    XCTAssertEqual(workspace.filteredAssets.map(\.id), [other.id])
+    XCTAssertNil(workspace.activeCollectionID)
+  }
+
+  func testDurableFolderCreateAndDeleteUseCatalogBoundaries() async throws {
+    let asset = makeAsset(name: "folder-actions.jpg")
+    let catalog = CatalogSpy(
+      assets: [asset], recipes: [asset.id: makeRecipe(assetID: asset.id)]
+    )
+    let workspace = makeWorkspace(catalog: catalog)
+    await workspace.reopen()
+
+    await workspace.createDurableFolder(named: "Projects")
+    let folder = try XCTUnwrap(workspace.folders.first)
+    await workspace.assignAsset(asset.id, toFolder: folder.id)
+    await workspace.assignAsset(asset.id, toFolder: nil)
+    await workspace.deleteDurableFolder(folder.id)
+
+    XCTAssertTrue(workspace.folders.isEmpty)
+    XCTAssertTrue(workspace.folderAssetIDs.isEmpty)
+  }
+
   func testReopenLoadsKeywordsAndVirtualCopiesAndSwitchesRecipeHistory() async throws {
     let asset = makeAsset(name: "keywords-and-copy.jpg")
     let baseRecipe = makeRecipe(assetID: asset.id, revision: 2, operations: [.exposureEV(0.5)])
@@ -901,6 +949,83 @@ final class PhotoWorkspaceTests: XCTestCase {
     XCTAssertEqual(workspace.virtualCopies.count, 1)
     XCTAssertEqual(workspace.selectedVirtualCopyID, workspace.virtualCopies.first?.id)
     XCTAssertEqual(workspace.currentRecipe?.virtualCopyID, workspace.selectedVirtualCopyID)
+  }
+
+  func
+    testWorkspaceReopensSavesAndAppliesDevelopPresetWithoutDroppingVirtualCopyOrUnknownOperations()
+    async throws
+  {
+    let asset = makeAsset(name: "preset-workflow.jpg")
+    let copy = try XCTUnwrap(VirtualCopy(sourceAssetID: asset.id, name: "Warm"))
+    let unknown = EditOperation.unknown(
+      "vendor.futureDevelop",
+      payload: ["strength": .number(Decimal(string: "0.5")!)]
+    )
+    let baseRecipe = makeRecipe(
+      assetID: asset.id,
+      revision: 2,
+      operations: [unknown, .exposureEV(0.25)]
+    )
+    let copyRecipe = EditRecipe(
+      assetID: asset.id,
+      virtualCopyID: copy.id,
+      revision: 1,
+      pins: baseRecipe.pins,
+      operations: [
+        .clone(
+          try XCTUnwrap(
+            CloneAdjustmentV1(
+              sourceAnchor: try XCTUnwrap(RetouchPointV1(x: 0.2, y: 0.2)),
+              targetAnchor: try XCTUnwrap(RetouchPointV1(x: 0.7, y: 0.7)),
+              brush: try XCTUnwrap(
+                RetouchBrushV1(
+                  samples: [
+                    try XCTUnwrap(
+                      RetouchBrushSampleV1(
+                        point: try XCTUnwrap(RetouchPointV1(x: 0.2, y: 0.2)), pressure: 1
+                      )
+                    )
+                  ],
+                  radius: 0.1,
+                  feather: 0.5,
+                  flow: 1
+                )
+              )
+            )
+          )
+        )
+      ]
+    )
+    let preset = try XCTUnwrap(
+      DevelopPreset(
+        name: "Warm",
+        operations: [.unknown("vendor.preset", payload: ["enabled": .bool(true)]), .contrast(0.4)],
+        virtualCopyID: copy.id
+      )
+    )
+    let catalog = CatalogSpy(
+      assets: [asset],
+      recipes: [asset.id: baseRecipe],
+      virtualCopies: [copy],
+      virtualCopyRecipes: [copy.id: copyRecipe],
+      presets: [preset]
+    )
+    let workspace = makeWorkspace(catalog: catalog)
+
+    await workspace.reopen()
+
+    XCTAssertEqual(workspace.developPresets, [preset])
+    await workspace.selectVirtualCopy(copy.id)
+    await workspace.saveDevelopPreset(named: "Saved copy")
+    XCTAssertEqual(workspace.developPresets.count, 2)
+    XCTAssertEqual(workspace.developPresets.last?.virtualCopyID, copy.id)
+
+    await workspace.applyDevelopPreset(preset.id)
+    XCTAssertEqual(workspace.currentRecipe?.virtualCopyID, copy.id)
+    XCTAssertEqual(
+      workspace.currentRecipe?.operations,
+      [copyRecipe.operations[0], preset.operations[0], preset.operations[1]]
+    )
   }
 
   func testDeliverOptionsReachTheExporter() async throws {
@@ -1109,10 +1234,13 @@ private actor CatalogSpy: MetadataCatalogStore, LibraryCatalogStore {
   private var recipes: [UUID: EditRecipe]
   private var storedCollections: [PhotoCollection]
   private var storedStacks: [PhotoStack]
+  private var storedFolders: [LibraryFolder] = []
+  private var assetFolderIDs: [UUID: UUID] = [:]
   private var storedKeywords: [KeywordNode] = []
   private var assetKeywordIDs: [UUID: [UUID]] = [:]
   private var storedVirtualCopies: [VirtualCopy] = []
   private var virtualCopyRecipes: [UUID: EditRecipe] = [:]
+  private var storedDevelopPresets: [DevelopPreset] = []
   private var recipeSaves: [EditRecipe] = []
   private var missing: [UUID: Bool] = [:]
   private var shouldFailNextRecipeSave = false
@@ -1122,19 +1250,25 @@ private actor CatalogSpy: MetadataCatalogStore, LibraryCatalogStore {
     recipes: [UUID: EditRecipe] = [:],
     collections: [PhotoCollection] = [],
     stacks: [PhotoStack] = [],
+    folders: [LibraryFolder] = [],
+    assetFolders: [UUID: UUID] = [:],
     keywords: [KeywordNode] = [],
     assetKeywords: [UUID: [UUID]] = [:],
     virtualCopies: [VirtualCopy] = [],
-    virtualCopyRecipes: [UUID: EditRecipe] = [:]
+    virtualCopyRecipes: [UUID: EditRecipe] = [:],
+    presets: [DevelopPreset] = []
   ) {
     storedAssets = assets
     self.recipes = recipes
     storedCollections = collections
     storedStacks = stacks
+    storedFolders = folders
+    assetFolderIDs = assetFolders
     storedKeywords = keywords
     assetKeywordIDs = assetKeywords
     storedVirtualCopies = virtualCopies
     self.virtualCopyRecipes = virtualCopyRecipes
+    storedDevelopPresets = presets
   }
 
   func upsertAsset(_ request: CatalogAssetUpsertRequest) async throws -> CatalogAssetUpsertResult {
@@ -1369,6 +1503,101 @@ private actor CatalogSpy: MetadataCatalogStore, LibraryCatalogStore {
   {
     storedVirtualCopies.removeAll { $0.id == request.virtualCopyID }
     return CatalogVirtualCopyDeleteResult(virtualCopyID: request.virtualCopyID)
+  }
+
+  func saveDevelopPreset(
+    _ request: CatalogDevelopPresetSaveRequest
+  ) async throws -> CatalogDevelopPresetSaveResult {
+    storedDevelopPresets.removeAll { $0.id == request.preset.id }
+    storedDevelopPresets.append(request.preset)
+    return CatalogDevelopPresetSaveResult(preset: request.preset)
+  }
+
+  func listDevelopPresets(
+    _ request: CatalogDevelopPresetListRequest
+  ) async throws -> CatalogDevelopPresetListResult {
+    CatalogDevelopPresetListResult(presets: storedDevelopPresets)
+  }
+
+  func deleteDevelopPreset(
+    _ request: CatalogDevelopPresetDeleteRequest
+  ) async throws -> CatalogDevelopPresetDeleteResult {
+    storedDevelopPresets.removeAll { $0.id == request.presetID }
+    return CatalogDevelopPresetDeleteResult(presetID: request.presetID)
+  }
+
+  func applyDevelopPreset(
+    _ request: CatalogApplyDevelopPresetRequest
+  ) async throws -> CatalogApplyDevelopPresetResult {
+    guard let preset = storedDevelopPresets.first(where: { $0.id == request.presetID }) else {
+      throw TestError.unused
+    }
+    let virtualCopyID = request.virtualCopyID ?? preset.virtualCopyID
+    let current = virtualCopyID.flatMap { virtualCopyRecipes[$0] } ?? recipes[request.assetID]
+    guard let current else { throw TestError.unused }
+    let retained = current.operations.filter { operation in
+      switch operation {
+      case .exposureEV, .contrast, .highlights, .shadows, .saturation,
+        .threeWayColorGrade, .toneCurve, .whiteBalance, .transform, .detail,
+        .optics, .effects, .calibration, .blackAndWhite, .hdr:
+        return false
+      case .maskedAdjustment, .clone, .healing, .redEye, .normalizedCrop,
+        .rotationDegrees, .unknown:
+        return true
+      }
+    }
+    let recipe = EditRecipe(
+      assetID: request.assetID,
+      virtualCopyID: virtualCopyID ?? current.virtualCopyID,
+      revision: current.revision + 1,
+      pins: current.pins,
+      operations: retained + preset.operations,
+      masks: current.masks
+    )
+    _ = try await saveRecipe(.init(recipe: recipe))
+    return CatalogApplyDevelopPresetResult(recipe: recipe)
+  }
+
+  func saveFolder(_ request: CatalogFolderSaveRequest) async throws -> CatalogFolderSaveResult {
+    storedFolders.removeAll { $0.id == request.folder.id }
+    storedFolders.append(request.folder)
+    return CatalogFolderSaveResult(folder: request.folder)
+  }
+
+  func listFolders(_ request: CatalogFolderListRequest) async throws -> CatalogFolderListResult {
+    CatalogFolderListResult(folders: storedFolders)
+  }
+
+  func deleteFolder(_ request: CatalogFolderDeleteRequest) async throws -> CatalogFolderDeleteResult
+  {
+    storedFolders.removeAll { $0.id == request.folderID }
+    assetFolderIDs = assetFolderIDs.filter { $0.value != request.folderID }
+    return CatalogFolderDeleteResult(folderID: request.folderID)
+  }
+
+  func setAssetFolder(
+    _ request: CatalogAssetFolderSetRequest
+  ) async throws -> CatalogAssetFolderSetResult {
+    if let folderID = request.folderID {
+      guard storedFolders.contains(where: { $0.id == folderID }) else { throw TestError.unused }
+      assetFolderIDs[request.assetID] = folderID
+    } else {
+      assetFolderIDs.removeValue(forKey: request.assetID)
+    }
+    return CatalogAssetFolderSetResult(assetID: request.assetID, folderID: request.folderID)
+  }
+
+  func listAssetFolder(_ request: CatalogAssetFolderRequest) async throws
+    -> CatalogAssetFolderResult
+  {
+    CatalogAssetFolderResult(assetID: request.assetID, folderID: assetFolderIDs[request.assetID])
+  }
+
+  func listFolderAssets(_ request: CatalogFolderAssetsRequest) async throws
+    -> CatalogFolderAssetsResult
+  {
+    let ids = Set(assetFolderIDs.compactMap { $0.value == request.folderID ? $0.key : nil })
+    return CatalogFolderAssetsResult(assets: storedAssets.filter { ids.contains($0.id) })
   }
 
   func savedRecipes() -> [EditRecipe] { recipeSaves }

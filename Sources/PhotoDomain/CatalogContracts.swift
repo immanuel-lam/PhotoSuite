@@ -358,6 +358,168 @@ public struct CatalogVirtualCopyDeleteResult: Codable, Hashable, Sendable {
   }
 }
 
+public struct CatalogDevelopPresetSaveRequest: Codable, Hashable, Sendable {
+  public let preset: DevelopPreset
+
+  public init(preset: DevelopPreset) {
+    self.preset = preset
+  }
+}
+
+public struct CatalogDevelopPresetSaveResult: Codable, Hashable, Sendable {
+  public let preset: DevelopPreset
+
+  public init(preset: DevelopPreset) {
+    self.preset = preset
+  }
+}
+
+public struct CatalogDevelopPresetListRequest: Codable, Hashable, Sendable {
+  public init() {}
+}
+
+public struct CatalogDevelopPresetListResult: Codable, Hashable, Sendable {
+  public let presets: [DevelopPreset]
+
+  public init(presets: [DevelopPreset]) {
+    self.presets = presets
+  }
+}
+
+public struct CatalogDevelopPresetDeleteRequest: Codable, Hashable, Sendable {
+  public let presetID: UUID
+
+  public init(presetID: UUID) {
+    self.presetID = presetID
+  }
+}
+
+public struct CatalogDevelopPresetDeleteResult: Codable, Hashable, Sendable {
+  public let presetID: UUID
+
+  public init(presetID: UUID) {
+    self.presetID = presetID
+  }
+}
+
+public struct CatalogApplyDevelopPresetRequest: Codable, Hashable, Sendable {
+  public let assetID: UUID
+  public let presetID: UUID
+  public let virtualCopyID: UUID?
+
+  public init(assetID: UUID, presetID: UUID, virtualCopyID: UUID? = nil) {
+    self.assetID = assetID
+    self.presetID = presetID
+    self.virtualCopyID = virtualCopyID
+  }
+}
+
+public struct CatalogApplyDevelopPresetResult: Codable, Hashable, Sendable {
+  public let recipe: EditRecipe
+
+  public init(recipe: EditRecipe) {
+    self.recipe = recipe
+  }
+}
+
+public struct CatalogFolderSaveRequest: Codable, Hashable, Sendable {
+  public let folder: LibraryFolder
+
+  public init(folder: LibraryFolder) {
+    self.folder = folder
+  }
+}
+
+public struct CatalogFolderSaveResult: Codable, Hashable, Sendable {
+  public let folder: LibraryFolder
+
+  public init(folder: LibraryFolder) {
+    self.folder = folder
+  }
+}
+
+public struct CatalogFolderListRequest: Codable, Hashable, Sendable {
+  public init() {}
+}
+
+public struct CatalogFolderListResult: Codable, Hashable, Sendable {
+  public let folders: [LibraryFolder]
+
+  public init(folders: [LibraryFolder]) {
+    self.folders = folders
+  }
+}
+
+public struct CatalogFolderDeleteRequest: Codable, Hashable, Sendable {
+  public let folderID: UUID
+
+  public init(folderID: UUID) {
+    self.folderID = folderID
+  }
+}
+
+public struct CatalogFolderDeleteResult: Codable, Hashable, Sendable {
+  public let folderID: UUID
+
+  public init(folderID: UUID) {
+    self.folderID = folderID
+  }
+}
+
+public struct CatalogAssetFolderSetRequest: Codable, Hashable, Sendable {
+  public let assetID: UUID
+  public let folderID: UUID?
+
+  public init(assetID: UUID, folderID: UUID?) {
+    self.assetID = assetID
+    self.folderID = folderID
+  }
+}
+
+public struct CatalogAssetFolderSetResult: Codable, Hashable, Sendable {
+  public let assetID: UUID
+  public let folderID: UUID?
+
+  public init(assetID: UUID, folderID: UUID?) {
+    self.assetID = assetID
+    self.folderID = folderID
+  }
+}
+
+public struct CatalogAssetFolderRequest: Codable, Hashable, Sendable {
+  public let assetID: UUID
+
+  public init(assetID: UUID) {
+    self.assetID = assetID
+  }
+}
+
+public struct CatalogAssetFolderResult: Codable, Hashable, Sendable {
+  public let assetID: UUID
+  public let folderID: UUID?
+
+  public init(assetID: UUID, folderID: UUID?) {
+    self.assetID = assetID
+    self.folderID = folderID
+  }
+}
+
+public struct CatalogFolderAssetsRequest: Codable, Hashable, Sendable {
+  public let folderID: UUID
+
+  public init(folderID: UUID) {
+    self.folderID = folderID
+  }
+}
+
+public struct CatalogFolderAssetsResult: Codable, Hashable, Sendable {
+  public let assets: [PhotoAsset]
+
+  public init(assets: [PhotoAsset]) {
+    self.assets = assets
+  }
+}
+
 public enum CatalogAssetOrder: String, Codable, Hashable, Sendable {
   case importDateAscending
   case importDateDescending
@@ -578,6 +740,23 @@ public protocol LibraryCatalogStore: CatalogStore {
     -> CatalogVirtualCopyListResult
   func deleteVirtualCopy(_ request: CatalogVirtualCopyDeleteRequest) async throws
     -> CatalogVirtualCopyDeleteResult
+  func saveDevelopPreset(_ request: CatalogDevelopPresetSaveRequest) async throws
+    -> CatalogDevelopPresetSaveResult
+  func listDevelopPresets(_ request: CatalogDevelopPresetListRequest) async throws
+    -> CatalogDevelopPresetListResult
+  func deleteDevelopPreset(_ request: CatalogDevelopPresetDeleteRequest) async throws
+    -> CatalogDevelopPresetDeleteResult
+  func applyDevelopPreset(_ request: CatalogApplyDevelopPresetRequest) async throws
+    -> CatalogApplyDevelopPresetResult
+  func saveFolder(_ request: CatalogFolderSaveRequest) async throws -> CatalogFolderSaveResult
+  func listFolders(_ request: CatalogFolderListRequest) async throws -> CatalogFolderListResult
+  func deleteFolder(_ request: CatalogFolderDeleteRequest) async throws -> CatalogFolderDeleteResult
+  func setAssetFolder(_ request: CatalogAssetFolderSetRequest) async throws
+    -> CatalogAssetFolderSetResult
+  func listAssetFolder(_ request: CatalogAssetFolderRequest) async throws
+    -> CatalogAssetFolderResult
+  func listFolderAssets(_ request: CatalogFolderAssetsRequest) async throws
+    -> CatalogFolderAssetsResult
 }
 
 public struct JobEnqueueRequest: Codable, Hashable, Sendable {

@@ -121,6 +121,7 @@ struct DevelopInspector: View {
   @Bindable var workspace: PhotoWorkspace
   @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
   @State private var draftColorGrade = ThreeWayColorGrade.neutral
+  @State private var presetName = ""
 
   var body: some View {
     ScrollView {
@@ -150,6 +151,9 @@ struct DevelopInspector: View {
 
         Divider()
         BaselineDevelopControls(workspace: workspace)
+
+        Divider()
+        DevelopPresetControls(workspace: workspace, name: $presetName)
 
         Divider()
         MaskControls(workspace: workspace)
@@ -203,6 +207,61 @@ struct DevelopInspector: View {
         ? "Select a photograph in Library to enable edit controls."
         : "Adjust the selected photograph."
     )
+  }
+}
+
+@MainActor
+private struct DevelopPresetControls: View {
+  @Bindable var workspace: PhotoWorkspace
+  @Binding var name: String
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Text("Presets").font(.headline)
+      HStack(spacing: 8) {
+        TextField("Preset name", text: $name)
+          .textFieldStyle(.roundedBorder)
+          .accessibilityIdentifier("develop-preset-name")
+        Button("Save") {
+          let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+          guard !trimmed.isEmpty else { return }
+          Task { await workspace.saveDevelopPreset(named: trimmed) }
+          name = ""
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        .accessibilityIdentifier("develop-preset-save")
+      }
+
+      if workspace.developPresets.isEmpty {
+        Text("Save a tone and colour recipe for reuse.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      } else {
+        ForEach(workspace.developPresets) { preset in
+          HStack(spacing: 8) {
+            Button {
+              Task { await workspace.applyDevelopPreset(preset.id) }
+            } label: {
+              Label(preset.name, systemImage: "slider.horizontal.3")
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("develop-preset-\(preset.id.uuidString)")
+            Button {
+              Task { await workspace.deleteDevelopPreset(preset.id) }
+            } label: {
+              Image(systemName: "trash")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("Delete preset")
+            .accessibilityLabel("Delete \(preset.name)")
+          }
+        }
+      }
+    }
+    .accessibilityIdentifier("develop-preset-controls")
   }
 }
 
