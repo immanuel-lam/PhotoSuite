@@ -36,6 +36,10 @@ public final class PhotoWorkspace {
   public var stacks: [LibraryStack] = []
   public var durableCollections: [PhotoCollection] = []
   public var durableStacks: [PhotoStack] = []
+  public var keywordNodes: [KeywordNode] = []
+  public var selectedAssetKeywords: [KeywordNode] = []
+  public var virtualCopies: [VirtualCopy] = []
+  public var selectedVirtualCopyID: UUID?
   public var smartFilter = LibrarySmartFilter()
   public var activeCollectionID: UUID?
   public var deliverOptions = DeliverOptions()
@@ -182,6 +186,10 @@ public final class PhotoWorkspace {
       preview = nil
       durableCollections = []
       durableStacks = []
+      keywordNodes = []
+      selectedAssetKeywords = []
+      virtualCopies = []
+      selectedVirtualCopyID = nil
 
       if let libraryCatalog = catalog as? any LibraryCatalogStore {
         do {
@@ -191,6 +199,12 @@ public final class PhotoWorkspace {
           durableStacks = try await libraryCatalog.listStacks(
             CatalogStackListRequest()
           ).stacks
+          keywordNodes = try await libraryCatalog.listKeywordNodes(
+            CatalogKeywordNodeListRequest()
+          ).keywords
+          virtualCopies = try await libraryCatalog.listVirtualCopies(
+            CatalogVirtualCopyListRequest()
+          ).virtualCopies
         } catch {
           record(error, operation: "library.reopen")
         }
@@ -232,6 +246,7 @@ public final class PhotoWorkspace {
         }
         selectedAssetID = assetID
         currentRecipe = recipe
+        await loadSelectedAssetKeywords(assetID)
         resetHistory()
         syncDraftValues()
         await refreshPreview()
@@ -431,19 +446,181 @@ public final class PhotoWorkspace {
     do {
       guard
         let recipe = try await catalog.latestRecipe(
-          CatalogLatestRecipeRequest(assetID: assetID)
+          CatalogLatestRecipeRequest(assetID: assetID, virtualCopyID: nil)
         ).recipe
       else {
         throw PhotoWorkspaceError.recipeMissing(assetID)
       }
       selectedAssetID = asset.id
+      selectedVirtualCopyID = nil
       currentRecipe = recipe
+      await loadSelectedAssetKeywords(assetID)
       preview = previewCache[asset.id]
       resetHistory()
       syncDraftValues()
       await refreshPreview()
     } catch {
       record(error, operation: "select")
+    }
+  }
+
+  /// Returns the selected asset's hierarchical keyword assignment in catalog order.
+  public func keywordPath(for keyword: KeywordNode) -> String {
+    var names = [keyword.name]
+    var parentID = keyword.parentID
+    var visited: Set<UUID> = [keyword.id]
+    while let id = parentID, visited.insert(id).inserted,
+      let parent = keywordNodes.first(where: { $0.id == id })
+    {
+      names.append(parent.name)
+      parentID = parent.parentID
+    }
+    return names.reversed().joined(separator: " › ")
+  }
+
+  public func assignKeywords(to assetID: UUID, keywordIDs: [UUID]) async {
+    guard selectedAssetID == assetID else {
+      record(PhotoWorkspaceError.invalidSelection(assetID), operation: "library.keywords.set")
+      return
+    }
+    guard let libraryCatalog = catalog as? any LibraryCatalogStore else {
+      record(PhotoWorkspaceError.libraryStoreUnavailable, operation: "library.keywords.set")
+      return
+    }
+    let knownIDs = Set(keywordNodes.map(\.id))
+    let normalizedIDs = keywordIDs.filter { knownIDs.contains($0) }
+    do {
+      _ = try await libraryCatalog.setAssetKeywords(
+        CatalogAssetKeywordSetRequest(assetID: assetID, keywordIDs: normalizedIDs)
+      )
+      selectedAssetKeywords = keywordNodes.filter { normalizedIDs.contains($0.id) }
+      lastError = nil
+      errorMessage = nil
+    } catch {
+      record(error, operation: "library.keywords.set")
+    }
+  }
+
+  public func selectVirtualCopy(_ virtualCopyID: UUID) async {
+    guard let copy = virtualCopies.first(where: { $0.id == virtualCopyID }) else {
+      record(
+        PhotoWorkspaceError.operationFailed(
+          operation: "library.virtual-copy.select",
+          message: "The virtual copy is not available in this catalog."
+        ),
+        operation: "library.virtual-copy.select"
+      )
+      return
+    }
+    guard assets.contains(where: { $0.id == copy.sourceAssetID }) else {
+      record(
+        PhotoWorkspaceError.invalidSelection(copy.sourceAssetID),
+        operation: "library.virtual-copy.select")
+      return
+    }
+    do {
+      guard
+        let recipe = try await catalog.latestRecipe(
+          CatalogLatestRecipeRequest(assetID: copy.sourceAssetID, virtualCopyID: copy.id)
+        ).recipe
+      else {
+        throw PhotoWorkspaceError.recipeMissing(copy.sourceAssetID)
+      }
+      selectedAssetID = copy.sourceAssetID
+      selectedVirtualCopyID = copy.id
+      currentRecipe = recipe
+      await loadSelectedAssetKeywords(copy.sourceAssetID)
+      preview = previewCache[copy.sourceAssetID]
+      resetHistory()
+      syncDraftValues()
+      await refreshPreview()
+    } catch {
+      record(error, operation: "library.virtual-copy.select")
+    }
+  }
+
+  public func createVirtualCopy(named name: String) async {
+    guard let asset = selectedAsset, let baseRecipe = currentRecipe else {
+      record(
+        PhotoWorkspaceError.noSelection(operation: "library.virtual-copy.create"),
+        operation: "library.virtual-copy.create")
+      return
+    }
+    guard let libraryCatalog = catalog as? any LibraryCatalogStore else {
+      record(PhotoWorkspaceError.libraryStoreUnavailable, operation: "library.virtual-copy.create")
+      return
+    }
+    guard let copy = VirtualCopy(sourceAssetID: asset.id, name: name) else {
+      record(
+        PhotoWorkspaceError.operationFailed(
+          operation: "library.virtual-copy.create",
+          message: "The virtual copy name is not valid."
+        ),
+        operation: "library.virtual-copy.create"
+      )
+      return
+    }
+    do {
+      let savedCopy = try await libraryCatalog.saveVirtualCopy(
+        CatalogVirtualCopySaveRequest(virtualCopy: copy)
+      ).virtualCopy
+      let copyRecipe = EditRecipe(
+        assetID: asset.id,
+        virtualCopyID: savedCopy.id,
+        revision: 0,
+        date: now(),
+        pins: baseRecipe.pins,
+        operations: baseRecipe.operations,
+        masks: baseRecipe.masks
+      )
+      _ = try await catalog.saveRecipe(CatalogRecipeSaveRequest(recipe: copyRecipe))
+      virtualCopies.append(savedCopy)
+      virtualCopies.sort { $0.updatedAt > $1.updatedAt }
+      selectedVirtualCopyID = savedCopy.id
+      currentRecipe = copyRecipe
+      resetHistory()
+      syncDraftValues()
+      await refreshPreview()
+      lastError = nil
+      errorMessage = nil
+    } catch {
+      record(error, operation: "library.virtual-copy.create")
+    }
+  }
+
+  public func deleteVirtualCopy(_ virtualCopyID: UUID) async {
+    guard let libraryCatalog = catalog as? any LibraryCatalogStore else {
+      record(PhotoWorkspaceError.libraryStoreUnavailable, operation: "library.virtual-copy.delete")
+      return
+    }
+    do {
+      _ = try await libraryCatalog.deleteVirtualCopy(
+        CatalogVirtualCopyDeleteRequest(virtualCopyID: virtualCopyID)
+      )
+      virtualCopies.removeAll { $0.id == virtualCopyID }
+      if selectedVirtualCopyID == virtualCopyID, let assetID = selectedAssetID {
+        selectedVirtualCopyID = nil
+        await selectAsset(assetID)
+      }
+      lastError = nil
+      errorMessage = nil
+    } catch {
+      record(error, operation: "library.virtual-copy.delete")
+    }
+  }
+
+  private func loadSelectedAssetKeywords(_ assetID: UUID) async {
+    guard let libraryCatalog = catalog as? any LibraryCatalogStore else {
+      selectedAssetKeywords = []
+      return
+    }
+    do {
+      selectedAssetKeywords = try await libraryCatalog.listAssetKeywords(
+        CatalogAssetKeywordListRequest(assetID: assetID)
+      ).keywords
+    } catch {
+      selectedAssetKeywords = []
+      record(error, operation: "library.keywords.list")
     }
   }
 
@@ -847,6 +1024,7 @@ public final class PhotoWorkspace {
     guard let masks = mutation(recipe.masks), masks != recipe.masks else { return }
     let updatedRecipe = EditRecipe(
       assetID: recipe.assetID,
+      virtualCopyID: recipe.virtualCopyID,
       revision: recipe.revision + 1,
       date: now(),
       pins: recipe.pins,
@@ -1004,6 +1182,7 @@ public final class PhotoWorkspace {
           }
           let repaired = EditRecipe(
             assetID: durableRecipe.assetID,
+            virtualCopyID: durableRecipe.virtualCopyID,
             revision: revision,
             date: now(),
             pins: sourceProbe.pins,
@@ -1015,6 +1194,7 @@ public final class PhotoWorkspace {
           ).recipe
           recipeForRender = EditRecipe(
             assetID: displayedRecipe.assetID,
+            virtualCopyID: displayedRecipe.virtualCopyID,
             revision: revision,
             date: repaired.date,
             pins: sourceProbe.pins,
@@ -1204,6 +1384,7 @@ public final class PhotoWorkspace {
     guard let current = currentRecipe else { return false }
     let recipe = EditRecipe(
       assetID: current.assetID,
+      virtualCopyID: current.virtualCopyID,
       revision: current.revision + 1,
       date: now(),
       pins: current.pins,
@@ -1240,6 +1421,7 @@ public final class PhotoWorkspace {
     }
     return EditRecipe(
       assetID: durableRecipe.assetID,
+      virtualCopyID: durableRecipe.virtualCopyID,
       revision: durableRecipe.revision,
       date: durableRecipe.date,
       pins: durableRecipe.pins,

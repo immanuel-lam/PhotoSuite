@@ -70,7 +70,7 @@ publishing, plug-in hosting, Adobe migration, AI features beyond the
 verified Vision subset, texture-aware retouching, and production support for
 the full range of Lightroom formats remain incomplete. Batch metadata editing,
 embedded/sidecar XMP writing, complete keyword-taxonomy authoring, and full
-virtual-copy workflow support are also incomplete. Cloud services, mobile
+virtual-copy batch/export workflow support are also incomplete. Cloud services, mobile
 clients, and web editing are out of scope. There is no signed, notarized,
 reproducible, or published application release. Do not use this pre-alpha
 revision for production photographs.

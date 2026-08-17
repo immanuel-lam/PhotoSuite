@@ -836,6 +836,73 @@ final class PhotoWorkspaceTests: XCTestCase {
     XCTAssertEqual(workspace.filteredAssets.map(\.id), [asset.id])
   }
 
+  func testReopenLoadsKeywordsAndVirtualCopiesAndSwitchesRecipeHistory() async throws {
+    let asset = makeAsset(name: "keywords-and-copy.jpg")
+    let baseRecipe = makeRecipe(assetID: asset.id, revision: 2, operations: [.exposureEV(0.5)])
+    let keyword = try XCTUnwrap(KeywordNode(name: "Portraits"))
+    let copy = try XCTUnwrap(VirtualCopy(sourceAssetID: asset.id, name: "Monochrome"))
+    let copyRecipe = EditRecipe(
+      assetID: asset.id,
+      virtualCopyID: copy.id,
+      revision: 1,
+      date: Date(timeIntervalSince1970: 4),
+      pins: baseRecipe.pins,
+      operations: [
+        .blackAndWhite(
+          try XCTUnwrap(
+            BlackAndWhiteAdjustmentV1(redWeight: 0.3, greenWeight: 0.6, blueWeight: 0.1)
+          ))
+      ]
+    )
+    let catalog = CatalogSpy(
+      assets: [asset],
+      recipes: [asset.id: baseRecipe],
+      keywords: [keyword],
+      assetKeywords: [asset.id: [keyword.id]],
+      virtualCopies: [copy],
+      virtualCopyRecipes: [copy.id: copyRecipe]
+    )
+    let workspace = makeWorkspace(catalog: catalog)
+
+    await workspace.reopen()
+
+    XCTAssertEqual(workspace.keywordNodes, [keyword])
+    XCTAssertEqual(workspace.selectedAssetKeywords, [keyword])
+    XCTAssertEqual(workspace.virtualCopies, [copy])
+    XCTAssertNil(workspace.selectedVirtualCopyID)
+    XCTAssertEqual(workspace.currentRecipe, baseRecipe)
+
+    await workspace.selectVirtualCopy(copy.id)
+
+    XCTAssertEqual(workspace.selectedVirtualCopyID, copy.id)
+    XCTAssertEqual(workspace.currentRecipe, copyRecipe)
+
+    await workspace.commitAdjustment(.exposure, value: 0.8)
+
+    XCTAssertEqual(workspace.currentRecipe?.virtualCopyID, copy.id)
+  }
+
+  func testAssigningKeywordsAndCreatingVirtualCopyPersistsDurableRecords() async throws {
+    let asset = makeAsset(name: "keyword-edit.jpg")
+    let baseRecipe = makeRecipe(assetID: asset.id)
+    let keyword = try XCTUnwrap(KeywordNode(name: "Travel"))
+    let catalog = CatalogSpy(
+      assets: [asset],
+      recipes: [asset.id: baseRecipe],
+      keywords: [keyword]
+    )
+    let workspace = makeWorkspace(catalog: catalog)
+    await workspace.reopen()
+
+    await workspace.assignKeywords(to: asset.id, keywordIDs: [keyword.id])
+    XCTAssertEqual(workspace.selectedAssetKeywords, [keyword])
+
+    await workspace.createVirtualCopy(named: "Warm")
+    XCTAssertEqual(workspace.virtualCopies.count, 1)
+    XCTAssertEqual(workspace.selectedVirtualCopyID, workspace.virtualCopies.first?.id)
+    XCTAssertEqual(workspace.currentRecipe?.virtualCopyID, workspace.selectedVirtualCopyID)
+  }
+
   func testDeliverOptionsReachTheExporter() async throws {
     let asset = makeAsset(name: "deliver.jpg")
     let recipe = makeRecipe(assetID: asset.id)
@@ -1042,6 +1109,10 @@ private actor CatalogSpy: MetadataCatalogStore, LibraryCatalogStore {
   private var recipes: [UUID: EditRecipe]
   private var storedCollections: [PhotoCollection]
   private var storedStacks: [PhotoStack]
+  private var storedKeywords: [KeywordNode] = []
+  private var assetKeywordIDs: [UUID: [UUID]] = [:]
+  private var storedVirtualCopies: [VirtualCopy] = []
+  private var virtualCopyRecipes: [UUID: EditRecipe] = [:]
   private var recipeSaves: [EditRecipe] = []
   private var missing: [UUID: Bool] = [:]
   private var shouldFailNextRecipeSave = false
@@ -1050,12 +1121,20 @@ private actor CatalogSpy: MetadataCatalogStore, LibraryCatalogStore {
     assets: [PhotoAsset] = [],
     recipes: [UUID: EditRecipe] = [:],
     collections: [PhotoCollection] = [],
-    stacks: [PhotoStack] = []
+    stacks: [PhotoStack] = [],
+    keywords: [KeywordNode] = [],
+    assetKeywords: [UUID: [UUID]] = [:],
+    virtualCopies: [VirtualCopy] = [],
+    virtualCopyRecipes: [UUID: EditRecipe] = [:]
   ) {
     storedAssets = assets
     self.recipes = recipes
     storedCollections = collections
     storedStacks = stacks
+    storedKeywords = keywords
+    assetKeywordIDs = assetKeywords
+    storedVirtualCopies = virtualCopies
+    self.virtualCopyRecipes = virtualCopyRecipes
   }
 
   func upsertAsset(_ request: CatalogAssetUpsertRequest) async throws -> CatalogAssetUpsertResult {
@@ -1082,14 +1161,20 @@ private actor CatalogSpy: MetadataCatalogStore, LibraryCatalogStore {
       shouldFailNextRecipeSave = false
       throw TestError.recipeSave
     }
-    recipes[request.recipe.assetID] = request.recipe
+    if let virtualCopyID = request.recipe.virtualCopyID {
+      virtualCopyRecipes[virtualCopyID] = request.recipe
+    } else {
+      recipes[request.recipe.assetID] = request.recipe
+    }
     recipeSaves.append(request.recipe)
     return CatalogRecipeSaveResult(recipe: request.recipe)
   }
 
   func latestRecipe(_ request: CatalogLatestRecipeRequest) async throws -> CatalogLatestRecipeResult
   {
-    CatalogLatestRecipeResult(recipe: recipes[request.assetID])
+    CatalogLatestRecipeResult(
+      recipe: request.virtualCopyID.flatMap { virtualCopyRecipes[$0] } ?? recipes[request.assetID]
+    )
   }
 
   func markAssetMissing(_ request: CatalogMarkMissingRequest) async throws
@@ -1225,6 +1310,65 @@ private actor CatalogSpy: MetadataCatalogStore, LibraryCatalogStore {
   {
     let ids = Set(storedStacks.first { $0.id == request.stackID }?.assetIDs ?? [])
     return CatalogStackAssetsResult(assets: storedAssets.filter { ids.contains($0.id) })
+  }
+
+  func saveKeywordNode(_ request: CatalogKeywordNodeSaveRequest) async throws
+    -> CatalogKeywordNodeSaveResult
+  {
+    storedKeywords.removeAll { $0.id == request.keyword.id }
+    storedKeywords.append(request.keyword)
+    return CatalogKeywordNodeSaveResult(keyword: request.keyword)
+  }
+
+  func listKeywordNodes(_ request: CatalogKeywordNodeListRequest) async throws
+    -> CatalogKeywordNodeListResult
+  {
+    CatalogKeywordNodeListResult(keywords: storedKeywords)
+  }
+
+  func deleteKeywordNode(_ request: CatalogKeywordNodeDeleteRequest) async throws
+    -> CatalogKeywordNodeDeleteResult
+  {
+    storedKeywords.removeAll { $0.id == request.keywordID }
+    return CatalogKeywordNodeDeleteResult(keywordID: request.keywordID)
+  }
+
+  func setAssetKeywords(_ request: CatalogAssetKeywordSetRequest) async throws
+    -> CatalogAssetKeywordSetResult
+  {
+    assetKeywordIDs[request.assetID] = request.keywordIDs
+    return CatalogAssetKeywordSetResult(
+      assetID: request.assetID,
+      keywordIDs: request.keywordIDs
+    )
+  }
+
+  func listAssetKeywords(_ request: CatalogAssetKeywordListRequest) async throws
+    -> CatalogAssetKeywordListResult
+  {
+    let ids = Set(assetKeywordIDs[request.assetID] ?? [])
+    return CatalogAssetKeywordListResult(keywords: storedKeywords.filter { ids.contains($0.id) })
+  }
+
+  func saveVirtualCopy(_ request: CatalogVirtualCopySaveRequest) async throws
+    -> CatalogVirtualCopySaveResult
+  {
+    storedVirtualCopies.removeAll { $0.id == request.virtualCopy.id }
+    storedVirtualCopies.append(request.virtualCopy)
+    return CatalogVirtualCopySaveResult(virtualCopy: request.virtualCopy)
+  }
+
+  func listVirtualCopies(_ request: CatalogVirtualCopyListRequest) async throws
+    -> CatalogVirtualCopyListResult
+  {
+    CatalogVirtualCopyListResult(virtualCopies: storedVirtualCopies)
+  }
+
+  func deleteVirtualCopy(_ request: CatalogVirtualCopyDeleteRequest) async throws
+    -> CatalogVirtualCopyDeleteResult
+  {
+    storedVirtualCopies.removeAll { $0.id == request.virtualCopyID }
+    return CatalogVirtualCopyDeleteResult(virtualCopyID: request.virtualCopyID)
   }
 
   func savedRecipes() -> [EditRecipe] { recipeSaves }
