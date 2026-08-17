@@ -32,6 +32,8 @@ contains these tested components:
   output with atomic publication and cancellation cleanup; and
 - Apple Vision foreground, subject, and person masks with durable grayscale
   coverage and stale-result protection; and
+- an offline Core ML model-pack manifest/loader registry with checksum,
+  licence, memory, and speed gates; and
 - durable face annotations with validated regions, optional labels, search,
   delete, and schema-v7 catalog migration; and
 - ImageCaptureCore camera discovery/status/events, tethered capture request
@@ -61,6 +63,8 @@ subject, and person selection is available offline; sky, object, background,
 landscape, real depth, denoise, super-resolution, automatic eye detection, and
 generative functions remain incomplete. No proprietary or network-only model
 pack is bundled.
+A local model-pack registry can verify optional installed resources, but no
+default model weights or inference implementation is included.
 A common-image preview fallback is available when a source is not accepted
 as RAW; this is not a supported-camera list. A licensed real RAW fixture is
 absent, so the real RAW fixture test is skipped.
