@@ -12,13 +12,32 @@ public enum CatalogJobKind: Codable, Hashable, Sendable {
   case unknown(String)
 
   public init(from decoder: any Decoder) throws {
-    let container = try decoder.singleValueContainer()
-    self = Self(code: try container.decode(String.self))
+    let decoded = try UnknownStringCodeCoding.decode(from: decoder)
+    guard !decoded.isExplicitlyUnknown else {
+      self = .unknown(decoded.value)
+      return
+    }
+    self = Self(code: decoded.value)
   }
 
   public func encode(to encoder: any Encoder) throws {
-    var container = encoder.singleValueContainer()
-    try container.encode(code)
+    switch self {
+    case .unknown(let value):
+      try UnknownStringCodeCoding.encodeUnknown(
+        value,
+        reservedValues: [
+          "importAssets",
+          "generateThumbnail",
+          "generatePreview",
+          "export",
+          "verifySource",
+          "aiMask",
+        ],
+        to: encoder
+      )
+    default:
+      try UnknownStringCodeCoding.encodeKnown(code, to: encoder)
+    }
   }
 
   private init(code: String) {
@@ -55,13 +74,25 @@ public enum CatalogJobState: Codable, Hashable, Sendable {
   case unknown(String)
 
   public init(from decoder: any Decoder) throws {
-    let container = try decoder.singleValueContainer()
-    self = Self(code: try container.decode(String.self))
+    let decoded = try UnknownStringCodeCoding.decode(from: decoder)
+    guard !decoded.isExplicitlyUnknown else {
+      self = .unknown(decoded.value)
+      return
+    }
+    self = Self(code: decoded.value)
   }
 
   public func encode(to encoder: any Encoder) throws {
-    var container = encoder.singleValueContainer()
-    try container.encode(code)
+    switch self {
+    case .unknown(let value):
+      try UnknownStringCodeCoding.encodeUnknown(
+        value,
+        reservedValues: ["queued", "running", "succeeded", "failed", "cancelled"],
+        to: encoder
+      )
+    default:
+      try UnknownStringCodeCoding.encodeKnown(code, to: encoder)
+    }
   }
 
   private init(code: String) {

@@ -2,12 +2,70 @@
 
 import Foundation
 
-public enum ColorLabel: String, Codable, CaseIterable, Hashable, Sendable {
+public enum ColorLabel: RawRepresentable, Codable, CaseIterable, Hashable, Sendable {
   case red
   case yellow
   case green
   case blue
   case purple
+  case unknown(String)
+
+  public static let allCases: [ColorLabel] = [.red, .yellow, .green, .blue, .purple]
+
+  public init?(rawValue: String) {
+    switch rawValue {
+    case "red": self = .red
+    case "yellow": self = .yellow
+    case "green": self = .green
+    case "blue": self = .blue
+    case "purple": self = .purple
+    default: self = .unknown(rawValue)
+    }
+  }
+
+  public var rawValue: String {
+    switch self {
+    case .red: "red"
+    case .yellow: "yellow"
+    case .green: "green"
+    case .blue: "blue"
+    case .purple: "purple"
+    case .unknown(let value): value
+    }
+  }
+
+  public init(from decoder: any Decoder) throws {
+    let decoded = try UnknownStringCodeCoding.decode(from: decoder)
+    guard !decoded.isExplicitlyUnknown else {
+      self = .unknown(decoded.value)
+      return
+    }
+
+    switch decoded.value {
+    case "red": self = .red
+    case "yellow": self = .yellow
+    case "green": self = .green
+    case "blue": self = .blue
+    case "purple": self = .purple
+    default: self = .unknown(decoded.value)
+    }
+  }
+
+  public func encode(to encoder: any Encoder) throws {
+    switch self {
+    case .red: try UnknownStringCodeCoding.encodeKnown("red", to: encoder)
+    case .yellow: try UnknownStringCodeCoding.encodeKnown("yellow", to: encoder)
+    case .green: try UnknownStringCodeCoding.encodeKnown("green", to: encoder)
+    case .blue: try UnknownStringCodeCoding.encodeKnown("blue", to: encoder)
+    case .purple: try UnknownStringCodeCoding.encodeKnown("purple", to: encoder)
+    case .unknown(let value):
+      try UnknownStringCodeCoding.encodeUnknown(
+        value,
+        reservedValues: ["red", "yellow", "green", "blue", "purple"],
+        to: encoder
+      )
+    }
+  }
 }
 
 public struct PhotoAsset: Codable, Hashable, Sendable, Identifiable {
