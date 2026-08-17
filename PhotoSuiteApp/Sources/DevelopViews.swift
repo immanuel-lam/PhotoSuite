@@ -12,6 +12,7 @@ import UniformTypeIdentifiers
 struct DevelopView: View {
   @Bindable var workspace: PhotoWorkspace
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var cropEditing = false
 
   var body: some View {
     ZStack {
@@ -36,6 +37,14 @@ struct DevelopView: View {
           .accessibilityIdentifier(ModernUIAccessibility.developCanvas)
           .focusable()
 
+        if cropEditing {
+          CropCanvasOverlay(
+            workspace: workspace,
+            isEditing: $cropEditing,
+            previewDimensions: workspace.preview?.pixelDimensions
+          )
+        }
+
         if workspace.preview == nil {
           if workspace.errorMessage == nil {
             ProgressView("Rendering preview…").controlSize(.large)
@@ -46,7 +55,7 @@ struct DevelopView: View {
         }
 
         if !workspace.proofMode {
-          TransientCanvasControls(workspace: workspace)
+          TransientCanvasControls(workspace: workspace, cropEditing: $cropEditing)
             .padding(.bottom, 22)
             .frame(maxHeight: .infinity, alignment: .bottom)
             .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
@@ -69,12 +78,16 @@ struct DevelopView: View {
       }
     }
     .animation(reduceMotion ? nil : .snappy(duration: 0.22), value: workspace.proofMode)
+    .onChange(of: workspace.selectedAssetID) { _, _ in
+      cropEditing = false
+    }
   }
 }
 
 @MainActor
 private struct TransientCanvasControls: View {
   @Bindable var workspace: PhotoWorkspace
+  @Binding var cropEditing: Bool
 
   var body: some View {
     GlassControlGroup {
@@ -104,6 +117,15 @@ private struct TransientCanvasControls: View {
       .help("Compare the original and edited photograph")
       .accessibilityIdentifier(ModernUIAccessibility.beforeAfterButton)
       .modifier(GlassButtonWhenAvailable(prominent: workspace.showsBefore))
+
+      Button {
+        cropEditing.toggle()
+      } label: {
+        Label(cropEditing ? "Close Crop" : "Crop", systemImage: "crop")
+      }
+      .help("Drag the crop frame on the photograph")
+      .modifier(GlassButtonWhenAvailable(prominent: cropEditing))
+      .accessibilityIdentifier(ModernUIAccessibility.cropCanvasToggle)
 
       Button {
         workspace.proofMode = true

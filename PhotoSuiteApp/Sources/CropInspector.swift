@@ -41,7 +41,7 @@ enum CropAspectPreset: String, CaseIterable, Identifiable, Sendable {
     }
   }
 
-  fileprivate var ratio: Double? {
+  var ratio: Double? {
     switch self {
     case .free, .original: nil
     case .square: 1
