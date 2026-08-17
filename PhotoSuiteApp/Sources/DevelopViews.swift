@@ -169,13 +169,7 @@ struct DevelopInspector: View {
         FaceAnnotationInspector(workspace: workspace, placement: .develop)
 
         Divider()
-        Text("Geometry").font(.headline)
-        HStack {
-          Button("Reset Crop") { Task { await workspace.resetCrop() } }
-            .accessibilityIdentifier("crop-reset-button")
-          Button("Rotate 90°") { Task { await workspace.rotateClockwise() } }
-            .accessibilityIdentifier("rotate-button")
-        }
+        CropInspector(workspace: workspace)
 
         Divider()
         HStack {

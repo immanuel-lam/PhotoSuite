@@ -258,6 +258,102 @@ final class PhotoWorkspaceTests: XCTestCase {
     XCTAssertEqual(savedRevisions, [1])
   }
 
+  func testCommittingCropReplacesTheCropCanonicallyAndRefreshesPreview() async throws {
+    let asset = makeAsset(name: "crop.jpg")
+    let oldCrop = try XCTUnwrap(NormalizedRect(x: 0.05, y: 0.1, width: 0.8, height: 0.75))
+    let newCrop = try XCTUnwrap(NormalizedRect(x: 0.2, y: 0.15, width: 0.6, height: 0.7))
+    let initial = makeRecipe(
+      assetID: asset.id,
+      operations: [
+        .rotationDegrees(90),
+        .normalizedCrop(oldCrop),
+        .exposureEV(0.5),
+      ]
+    )
+    let catalog = CatalogSpy(assets: [asset], recipes: [asset.id: initial])
+    let workspace = makeWorkspace(catalog: catalog)
+
+    await workspace.reopen()
+    await workspace.commitCrop(newCrop)
+
+    XCTAssertEqual(
+      workspace.currentRecipe?.operations,
+      [.exposureEV(0.5), .normalizedCrop(newCrop), .rotationDegrees(90)]
+    )
+    XCTAssertEqual(workspace.currentRecipe?.revision, 1)
+    XCTAssertEqual(workspace.preview?.imageData, Data("preview-1".utf8))
+    let savedRevisions = await catalog.savedRecipes().map(\.revision)
+    XCTAssertEqual(savedRevisions, [1])
+
+    await workspace.undo()
+
+    XCTAssertEqual(workspace.currentRecipe?.operations, initial.operations)
+    XCTAssertEqual(workspace.currentRecipe?.revision, 2)
+    XCTAssertEqual(workspace.preview?.imageData, Data("preview-2".utf8))
+  }
+
+  func testResetCropKeepsOtherOperationsAndPersistsThroughReopen() async throws {
+    let asset = makeAsset(name: "reset-crop.jpg")
+    let crop = try XCTUnwrap(NormalizedRect(x: 0.1, y: 0.1, width: 0.75, height: 0.7))
+    let initial = makeRecipe(
+      assetID: asset.id,
+      revision: 4,
+      operations: [.exposureEV(0.25), .normalizedCrop(crop), .rotationDegrees(180)]
+    )
+    let catalog = CatalogSpy(assets: [asset], recipes: [asset.id: initial])
+    let workspace = makeWorkspace(catalog: catalog)
+
+    await workspace.reopen()
+    await workspace.resetCrop()
+
+    XCTAssertEqual(
+      workspace.currentRecipe?.operations,
+      [.exposureEV(0.25), .rotationDegrees(180)]
+    )
+    XCTAssertEqual(workspace.currentRecipe?.revision, 5)
+
+    let reopened = makeWorkspace(catalog: catalog)
+    await reopened.reopen()
+
+    XCTAssertEqual(reopened.currentRecipe?.revision, 5)
+    XCTAssertEqual(reopened.currentRecipe?.operations, workspace.currentRecipe?.operations)
+  }
+
+  func testInvalidNormalizedCropBoundsAreRejectedBeforeCommit() async throws {
+    let asset = makeAsset(name: "invalid-crop.jpg")
+    let initial = makeRecipe(assetID: asset.id)
+    let catalog = CatalogSpy(assets: [asset], recipes: [asset.id: initial])
+    let workspace = makeWorkspace(catalog: catalog)
+
+    XCTAssertNil(NormalizedRect(x: -0.01, y: 0, width: 0.5, height: 0.5))
+    XCTAssertNil(NormalizedRect(x: 0.75, y: 0, width: 0.5, height: 0.5))
+    XCTAssertNil(NormalizedRect(x: 0, y: 0.75, width: 0.5, height: 0.5))
+
+    await workspace.reopen()
+
+    XCTAssertEqual(workspace.currentRecipe, initial)
+    let savedRecipes = await catalog.savedRecipes()
+    XCTAssertTrue(savedRecipes.isEmpty)
+  }
+
+  func testCropCommitDoesNotChangeSourceURLOrFingerprint() async throws {
+    let asset = makeAsset(name: "immutable-crop.jpg")
+    let crop = try XCTUnwrap(NormalizedRect(x: 0.15, y: 0.2, width: 0.65, height: 0.6))
+    let initial = makeRecipe(assetID: asset.id)
+    let catalog = CatalogSpy(assets: [asset], recipes: [asset.id: initial])
+    let workspace = makeWorkspace(catalog: catalog)
+
+    await workspace.reopen()
+    await workspace.commitCrop(crop)
+
+    let assetSnapshot = await catalog.assetSnapshot()
+    let persistedAsset = try XCTUnwrap(assetSnapshot.first)
+    XCTAssertEqual(persistedAsset.sourceURL, asset.sourceURL)
+    XCTAssertEqual(persistedAsset.fingerprint, asset.fingerprint)
+    XCTAssertEqual(workspace.selectedAsset?.sourceURL, asset.sourceURL)
+    XCTAssertEqual(workspace.selectedAsset?.fingerprint, asset.fingerprint)
+  }
+
   func testCommittingBaselineDevelopOperationReplacesItsFamilyAndPreservesOtherEdits() async throws
   {
     let asset = makeAsset(name: "baseline.jpg")

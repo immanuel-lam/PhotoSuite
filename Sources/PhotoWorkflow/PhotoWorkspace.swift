@@ -1318,6 +1318,18 @@ public final class PhotoWorkspace {
     }
   }
 
+  /// Persist a validated normalized crop for the selected photograph.
+  ///
+  /// Crop is a single canonical Develop operation. A new crop replaces the
+  /// previous crop, retains all unrelated operations, creates one recipe
+  /// revision, records the prior operations for undo, and refreshes the
+  /// rebuildable preview from the same recipe graph.
+  public func commitCrop(_ rect: NormalizedRect) async {
+    await enqueueEditMutation { [weak self] in
+      await self?.performCommitCrop(rect)
+    }
+  }
+
   public func commitDevelopOperation(_ operation: EditOperation) async {
     await enqueueEditMutation { [weak self] in
       await self?.performCommitDevelopOperation(operation)
@@ -1579,6 +1591,35 @@ public final class PhotoWorkspace {
     undoStack.append(recipe.operations)
     redoStack.removeAll()
     if !(await saveOperations(canonicalized(operations))) {
+      undoStack = oldUndo
+      redoStack = oldRedo
+    }
+  }
+
+  private func performCommitCrop(_ rect: NormalizedRect) async {
+    guard Self.isValidCrop(rect) else {
+      record(
+        PhotoWorkspaceError.operationFailed(
+          operation: "crop",
+          message: "The crop rectangle must be finite, positive, and inside unit bounds."
+        ),
+        operation: "crop"
+      )
+      return
+    }
+    guard let recipe = editableRecipe(operation: "crop") else { return }
+    var operations = recipe.operations.filter {
+      if case .normalizedCrop = $0 { return false }
+      return true
+    }
+    operations.append(.normalizedCrop(rect))
+    operations = canonicalized(operations)
+    guard operations != recipe.operations else { return }
+    let oldUndo = undoStack
+    let oldRedo = redoStack
+    undoStack.append(recipe.operations)
+    redoStack.removeAll()
+    if !(await saveOperations(operations)) {
       undoStack = oldUndo
       redoStack = oldRedo
     }
@@ -1945,6 +1986,16 @@ public final class PhotoWorkspace {
 
   private static func needsEmptyRAWPinRecovery(_ pins: EnginePins) -> Bool {
     pins.decoderIdentifier == "com.apple.ciraw" && pins.decoderVersion.isEmpty
+  }
+
+  private static func isValidCrop(_ rect: NormalizedRect) -> Bool {
+    let values = [rect.x, rect.y, rect.width, rect.height]
+    return values.allSatisfy(\.isFinite)
+      && values.allSatisfy { (0...1).contains($0) }
+      && rect.width > 0
+      && rect.height > 0
+      && rect.x + rect.width <= 1
+      && rect.y + rect.height <= 1
   }
 
   private func resetHistory() {
