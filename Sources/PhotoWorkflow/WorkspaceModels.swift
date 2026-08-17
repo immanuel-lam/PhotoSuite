@@ -23,6 +23,20 @@ public enum AdjustmentKind: String, CaseIterable, Identifiable, Sendable {
   public var id: Self { self }
 }
 
+public enum DevelopAdjustmentFamily: String, CaseIterable, Identifiable, Sendable {
+  case toneCurve
+  case whiteBalance
+  case transform
+  case detail
+  case optics
+  case effects
+  case calibration
+  case blackAndWhite
+  case hdr
+
+  public var id: Self { self }
+}
+
 public struct SourceProbe: Hashable, Sendable {
   public let dimensions: PixelDimensions
   public let pins: EnginePins

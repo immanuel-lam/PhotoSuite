@@ -51,6 +51,13 @@ public final class PhotoWorkspace {
     return .neutral
   }
 
+  /// Baseline Develop operations currently persisted for the selected recipe.
+  /// The application uses this read-only projection to restore inspector state
+  /// without exposing catalog implementation details to the UI.
+  public var currentDevelopOperations: [EditOperation] {
+    currentRecipe?.operations.filter { Self.developFamily($0) != nil } ?? []
+  }
+
   public var filteredAssets: [PhotoAsset] {
     let collectionAssetIDs = activeCollectionID.flatMap { collectionID in
       collections.first { $0.id == collectionID }.map { Set($0.assetIDs) }
@@ -366,6 +373,18 @@ public final class PhotoWorkspace {
     }
   }
 
+  public func commitDevelopOperation(_ operation: EditOperation) async {
+    await enqueueEditMutation { [weak self] in
+      await self?.performCommitDevelopOperation(operation)
+    }
+  }
+
+  public func clearDevelopOperation(_ family: DevelopAdjustmentFamily) async {
+    await enqueueEditMutation { [weak self] in
+      await self?.performClearDevelopOperation(family)
+    }
+  }
+
   public func rotateClockwise() async {
     await enqueueEditMutation { [weak self] in await self?.performRotateClockwise() }
   }
@@ -420,6 +439,46 @@ public final class PhotoWorkspace {
     undoStack.append(recipe.operations)
     redoStack.removeAll()
     if !(await saveOperations(operations)) {
+      undoStack = oldUndo
+      redoStack = oldRedo
+    }
+  }
+
+  private func performCommitDevelopOperation(_ operation: EditOperation) async {
+    guard let family = Self.developFamily(operation) else {
+      record(
+        PhotoWorkspaceError.operationFailed(
+          operation: "develop adjustment",
+          message: "The selected operation is not a baseline Develop adjustment."
+        ),
+        operation: "develop adjustment"
+      )
+      return
+    }
+    guard let recipe = editableRecipe(operation: "develop adjustment") else { return }
+    var operations = recipe.operations.filter { Self.developFamily($0) != family }
+    if !Self.isNeutralDevelopOperation(operation) { operations.append(operation) }
+    operations = canonicalized(operations)
+    guard operations != recipe.operations else { return }
+    let oldUndo = undoStack
+    let oldRedo = redoStack
+    undoStack.append(recipe.operations)
+    redoStack.removeAll()
+    if !(await saveOperations(operations)) {
+      undoStack = oldUndo
+      redoStack = oldRedo
+    }
+  }
+
+  private func performClearDevelopOperation(_ family: DevelopAdjustmentFamily) async {
+    guard let recipe = editableRecipe(operation: "reset develop adjustment") else { return }
+    let operations = recipe.operations.filter { Self.developFamily($0) != family }
+    guard operations != recipe.operations else { return }
+    let oldUndo = undoStack
+    let oldRedo = redoStack
+    undoStack.append(recipe.operations)
+    redoStack.removeAll()
+    if !(await saveOperations(canonicalized(operations))) {
       undoStack = oldUndo
       redoStack = oldRedo
     }
@@ -911,6 +970,47 @@ public final class PhotoWorkspace {
       let rightRank = rank(right.element)
       return leftRank == rightRank ? left.offset < right.offset : leftRank < rightRank
     }.map(\.element)
+  }
+
+  private static func developFamily(_ operation: EditOperation) -> DevelopAdjustmentFamily? {
+    switch operation {
+    case .toneCurve: .toneCurve
+    case .whiteBalance: .whiteBalance
+    case .transform: .transform
+    case .detail: .detail
+    case .optics: .optics
+    case .effects: .effects
+    case .calibration: .calibration
+    case .blackAndWhite: .blackAndWhite
+    case .hdr: .hdr
+    default: nil
+    }
+  }
+
+  private static func isNeutralDevelopOperation(_ operation: EditOperation) -> Bool {
+    switch operation {
+    case .toneCurve(let adjustment):
+      adjustment.blackPoint == 0
+        && adjustment.shadows == 0.25
+        && adjustment.midtones == 0.5
+        && adjustment.highlights == 0.75
+        && adjustment.whitePoint == 1
+    case .whiteBalance(let adjustment):
+      adjustment.temperature == 0 && adjustment.tint == 0
+    case .transform(let adjustment):
+      adjustment.straightenDegrees == 0
+        && !adjustment.flipHorizontal
+        && !adjustment.flipVertical
+    case .detail(let adjustment):
+      adjustment.sharpening == 0 && adjustment.luminanceNoiseReduction == 0
+    case .optics(let adjustment): adjustment.vignetteCorrection == 0
+    case .effects(let adjustment): adjustment.vignetteAmount == 0
+    case .calibration(let adjustment):
+      adjustment.redGain == 0 && adjustment.greenGain == 0 && adjustment.blueGain == 0
+    case .hdr(let adjustment): !adjustment.isEnabled
+    case .blackAndWhite: false
+    default: false
+    }
   }
 
   private func message(for error: any Error) -> String {

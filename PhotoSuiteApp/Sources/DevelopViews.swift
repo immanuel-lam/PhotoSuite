@@ -149,6 +149,9 @@ struct DevelopInspector: View {
         )
 
         Divider()
+        BaselineDevelopControls(workspace: workspace)
+
+        Divider()
         Text("Geometry").font(.headline)
         HStack {
           Button("Reset Crop") { Task { await workspace.resetCrop() } }

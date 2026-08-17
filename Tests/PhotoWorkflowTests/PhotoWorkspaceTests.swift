@@ -258,6 +258,36 @@ final class PhotoWorkspaceTests: XCTestCase {
     XCTAssertEqual(savedRevisions, [1])
   }
 
+  func testCommittingBaselineDevelopOperationReplacesItsFamilyAndPreservesOtherEdits() async throws
+  {
+    let asset = makeAsset(name: "baseline.jpg")
+    let grade = try makeColorGrade()
+    let previousWhiteBalance = try XCTUnwrap(
+      WhiteBalanceAdjustmentV1(temperature: -0.2, tint: 0.1)
+    )
+    let nextWhiteBalance = try XCTUnwrap(
+      WhiteBalanceAdjustmentV1(temperature: 0.35, tint: -0.15)
+    )
+    let initial = makeRecipe(
+      assetID: asset.id,
+      operations: [
+        .threeWayColorGrade(grade),
+        .whiteBalance(previousWhiteBalance),
+      ]
+    )
+    let catalog = CatalogSpy(assets: [asset], recipes: [asset.id: initial])
+    let workspace = makeWorkspace(catalog: catalog)
+    await workspace.reopen()
+
+    await workspace.commitDevelopOperation(.whiteBalance(nextWhiteBalance))
+
+    XCTAssertEqual(workspace.currentRecipe?.revision, 1)
+    XCTAssertEqual(
+      workspace.currentRecipe?.operations,
+      [.threeWayColorGrade(grade), .whiteBalance(nextWhiteBalance)]
+    )
+  }
+
   func testNewPreviewCancelsAndSuppressesStalePreview() async throws {
     let asset = makeAsset(name: "preview.jpg")
     let initial = makeRecipe(assetID: asset.id)
