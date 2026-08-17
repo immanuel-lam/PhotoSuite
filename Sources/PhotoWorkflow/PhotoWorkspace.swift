@@ -1423,18 +1423,21 @@ public final class PhotoWorkspace {
       case .saturation: 4
       case .threeWayColorGrade: 5
       case .maskedAdjustment: 6
-      case .normalizedCrop: 7
-      case .rotationDegrees: 8
-      case .toneCurve: 9
-      case .whiteBalance: 10
-      case .transform: 11
-      case .detail: 12
-      case .optics: 13
-      case .effects: 14
-      case .calibration: 15
-      case .blackAndWhite: 16
-      case .hdr: 17
-      case .unknown: 18
+      case .clone: 7
+      case .healing: 8
+      case .redEye: 9
+      case .normalizedCrop: 10
+      case .rotationDegrees: 11
+      case .toneCurve: 12
+      case .whiteBalance: 13
+      case .transform: 14
+      case .detail: 15
+      case .optics: 16
+      case .effects: 17
+      case .calibration: 18
+      case .blackAndWhite: 19
+      case .hdr: 20
+      case .unknown: 21
       }
     }
     return operations.enumerated().sorted { left, right in

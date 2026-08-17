@@ -10,6 +10,9 @@ public enum EditOperation: Codable, Hashable, Sendable {
   case saturation(Double)
   case threeWayColorGrade(ThreeWayColorGrade)
   case maskedAdjustment(MaskedAdjustmentV1)
+  case clone(CloneAdjustmentV1)
+  case healing(HealingAdjustmentV1)
+  case redEye(RedEyeAdjustmentV1)
   case normalizedCrop(NormalizedRect)
   case rotationDegrees(Double)
   case toneCurve(ToneCurveAdjustmentV1)
@@ -31,6 +34,9 @@ public enum EditOperation: Codable, Hashable, Sendable {
     "saturation",
     "threeWayColorGrade",
     "maskedAdjustment",
+    "clone",
+    "healing",
+    "redEye",
     "normalizedCrop",
     "rotationDegrees",
     "toneCurve",
@@ -73,6 +79,15 @@ public enum EditOperation: Codable, Hashable, Sendable {
       self = .maskedAdjustment(
         try container.decode(MaskedAdjustmentV1.self, forKey: adjustmentKey)
       )
+    case ("clone", false)
+    where Self.hasVersionOneAdjustment(container, key: adjustmentKey):
+      self = .clone(try container.decode(CloneAdjustmentV1.self, forKey: adjustmentKey))
+    case ("healing", false)
+    where Self.hasVersionOneAdjustment(container, key: adjustmentKey):
+      self = .healing(try container.decode(HealingAdjustmentV1.self, forKey: adjustmentKey))
+    case ("redEye", false)
+    where Self.hasVersionOneAdjustment(container, key: adjustmentKey):
+      self = .redEye(try container.decode(RedEyeAdjustmentV1.self, forKey: adjustmentKey))
     case ("normalizedCrop", false):
       self = .normalizedCrop(try container.decode(NormalizedRect.self, forKey: rectKey))
     case ("rotationDegrees", false):
@@ -144,6 +159,15 @@ public enum EditOperation: Codable, Hashable, Sendable {
       try container.encode(grade, forKey: gradeKey)
     case .maskedAdjustment(let adjustment):
       try container.encode("maskedAdjustment", forKey: kindKey)
+      try container.encode(adjustment, forKey: adjustmentKey)
+    case .clone(let adjustment):
+      try container.encode("clone", forKey: kindKey)
+      try container.encode(adjustment, forKey: adjustmentKey)
+    case .healing(let adjustment):
+      try container.encode("healing", forKey: kindKey)
+      try container.encode(adjustment, forKey: adjustmentKey)
+    case .redEye(let adjustment):
+      try container.encode("redEye", forKey: kindKey)
       try container.encode(adjustment, forKey: adjustmentKey)
     case .normalizedCrop(let rect):
       try container.encode("normalizedCrop", forKey: kindKey)

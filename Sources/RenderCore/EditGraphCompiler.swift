@@ -64,6 +64,7 @@ enum EditGraphCompiler {
 
     var image = normalizeOrigin(input)
     for (index, operation) in recipe.operations.enumerated() {
+      try Task.checkCancellation()
       switch operation {
       case .exposureEV(let delta):
         let exposure = Float(delta)
@@ -145,6 +146,15 @@ enum EditGraphCompiler {
           mask: maskImage,
           index: index
         )
+
+      case .clone(let adjustment):
+        image = try RetouchRenderer.applyClone(image, adjustment: adjustment, index: index)
+
+      case .healing(let adjustment):
+        image = try RetouchRenderer.applyHealing(image, adjustment: adjustment, index: index)
+
+      case .redEye:
+        throw RenderCoreError.unsupportedOperation(index: index, kind: "redEye")
 
       case .normalizedCrop(let crop):
         image = try cropImage(image, crop: crop, index: index)
