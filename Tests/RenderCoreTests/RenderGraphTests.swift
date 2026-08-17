@@ -1,0 +1,255 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+import CoreGraphics
+import Foundation
+import PhotoDomain
+import XCTest
+
+@testable import RenderCore
+
+final class RenderGraphTests: XCTestCase {
+  func testVersionOneContrastAndSaturationMappingsKeepExactEndpointsAndIdentity() {
+    XCTAssertEqual(RecipeRenderContractV1.contrastFactor(for: -1), 0.25, accuracy: 0.000_001)
+    XCTAssertEqual(RecipeRenderContractV1.contrastFactor(for: 0), 1, accuracy: 0.000_001)
+    XCTAssertEqual(RecipeRenderContractV1.contrastFactor(for: 1), 4, accuracy: 0.000_001)
+    XCTAssertEqual(RecipeRenderContractV1.saturationFactor(for: -1), 0, accuracy: 0.000_001)
+    XCTAssertEqual(RecipeRenderContractV1.saturationFactor(for: 0), 1, accuracy: 0.000_001)
+    XCTAssertEqual(RecipeRenderContractV1.saturationFactor(for: 1), 2, accuracy: 0.000_001)
+  }
+
+  func testExposureChangesRenderedPixel() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let decoder = try AppleRawDecoder()
+    let baseline = try await decoder.preview(
+      sourceURL: fixture.source,
+      recipe: makeRecipe(),
+      maximumPixelDimension: nil
+    )
+    let exposed = try await decoder.preview(
+      sourceURL: fixture.source,
+      recipe: makeRecipe(operations: [.exposureEV(1)]),
+      maximumPixelDimension: nil
+    )
+
+    let baselinePixel = try middlePixel(of: baseline)
+    let exposedPixel = try middlePixel(of: exposed)
+    XCTAssertGreaterThan(exposedPixel.red, baselinePixel.red)
+    XCTAssertGreaterThan(exposedPixel.green, baselinePixel.green)
+  }
+
+  func testNormalizedZeroAdjustmentsAreIdentityOperations() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let decoder = try AppleRawDecoder()
+    let baseline = try await decoder.preview(
+      sourceURL: fixture.source,
+      recipe: makeRecipe(),
+      maximumPixelDimension: nil
+    )
+    let adjusted = try await decoder.preview(
+      sourceURL: fixture.source,
+      recipe: makeRecipe(
+        operations: [.contrast(0), .highlights(0), .shadows(0), .saturation(0)]
+      ),
+      maximumPixelDimension: nil
+    )
+
+    XCTAssertEqual(
+      try DeterministicImageFixture.rgba8Data(from: adjusted),
+      try DeterministicImageFixture.rgba8Data(from: baseline)
+    )
+  }
+
+  func testHighlightAndShadowDeltasSelectDifferentTonalRanges() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let decoder = try AppleRawDecoder()
+    let baseline = try await decoder.preview(
+      sourceURL: fixture.source,
+      recipe: makeRecipe(),
+      maximumPixelDimension: nil
+    )
+    let highlights = try await decoder.preview(
+      sourceURL: fixture.source,
+      recipe: makeRecipe(operations: [.highlights(1)]),
+      maximumPixelDimension: nil
+    )
+    let shadows = try await decoder.preview(
+      sourceURL: fixture.source,
+      recipe: makeRecipe(operations: [.shadows(1)]),
+      maximumPixelDimension: nil
+    )
+    let baselineData = try DeterministicImageFixture.rgba8Data(from: baseline)
+    let highlightData = try DeterministicImageFixture.rgba8Data(from: highlights)
+    let shadowData = try DeterministicImageFixture.rgba8Data(from: shadows)
+    let darkBase = DeterministicImageFixture.pixel(x: 0, y: 0, width: 8, in: baselineData)
+    let brightBase = DeterministicImageFixture.pixel(x: 7, y: 5, width: 8, in: baselineData)
+    let darkHighlight = DeterministicImageFixture.pixel(x: 0, y: 0, width: 8, in: highlightData)
+    let brightHighlight = DeterministicImageFixture.pixel(x: 7, y: 5, width: 8, in: highlightData)
+    let darkShadow = DeterministicImageFixture.pixel(x: 0, y: 0, width: 8, in: shadowData)
+    let brightShadow = DeterministicImageFixture.pixel(x: 7, y: 5, width: 8, in: shadowData)
+    let brightHighlightLift = Int(brightHighlight.red) - Int(brightBase.red)
+    let darkHighlightLift = Int(darkHighlight.red) - Int(darkBase.red)
+    let darkShadowLift = Int(darkShadow.red) - Int(darkBase.red)
+    let brightShadowLift = Int(brightShadow.red) - Int(brightBase.red)
+
+    XCTAssertGreaterThan(brightHighlightLift, darkHighlightLift)
+    XCTAssertGreaterThan(darkShadowLift, brightShadowLift)
+  }
+
+  func testCropUsesTopLeftFloorCeilEdgesAndExactDimensions() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let decoder = try AppleRawDecoder()
+    let crop = try XCTUnwrap(NormalizedRect(x: 0.24, y: 0, width: 0.51, height: 0.5))
+
+    let image = try await decoder.preview(
+      sourceURL: fixture.source,
+      recipe: makeRecipe(operations: [.normalizedCrop(crop)]),
+      maximumPixelDimension: nil
+    )
+
+    XCTAssertEqual(image.width, 5)
+    XCTAssertEqual(image.height, 3)
+  }
+
+  func testQuarterTurnRotationUsesExactDimensions() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let decoder = try AppleRawDecoder()
+
+    let quarter = try await decoder.preview(
+      sourceURL: fixture.source,
+      recipe: makeRecipe(operations: [.rotationDegrees(90)]),
+      maximumPixelDimension: nil
+    )
+    let half = try await decoder.preview(
+      sourceURL: fixture.source,
+      recipe: makeRecipe(operations: [.rotationDegrees(180)]),
+      maximumPixelDimension: nil
+    )
+
+    XCTAssertEqual(quarter.width, 6)
+    XCTAssertEqual(quarter.height, 8)
+    XCTAssertEqual(half.width, 8)
+    XCTAssertEqual(half.height, 6)
+  }
+
+  func testRecipeOrderChangesGeometry() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let decoder = try AppleRawDecoder()
+    let leftHalf = try XCTUnwrap(NormalizedRect(x: 0, y: 0, width: 0.5, height: 1))
+
+    let cropThenRotate = try await decoder.preview(
+      sourceURL: fixture.source,
+      recipe: makeRecipe(operations: [.normalizedCrop(leftHalf), .rotationDegrees(90)]),
+      maximumPixelDimension: nil
+    )
+    let rotateThenCrop = try await decoder.preview(
+      sourceURL: fixture.source,
+      recipe: makeRecipe(operations: [.rotationDegrees(90), .normalizedCrop(leftHalf)]),
+      maximumPixelDimension: nil
+    )
+
+    XCTAssertEqual([cropThenRotate.width, cropThenRotate.height], [6, 4])
+    XCTAssertEqual([rotateThenCrop.width, rotateThenCrop.height], [3, 8])
+  }
+
+  func testUnknownOperationReturnsIndexedTypedError() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let decoder = try AppleRawDecoder()
+
+    do {
+      _ = try await decoder.preview(
+        sourceURL: fixture.source,
+        recipe: makeRecipe(
+          operations: [.exposureEV(0), .unknown("futureTone", payload: [:])]
+        ),
+        maximumPixelDimension: nil
+      )
+      XCTFail("Expected unsupported operation error")
+    } catch let error as RenderCoreError {
+      XCTAssertEqual(error, .unsupportedOperation(index: 1, kind: "futureTone"))
+    }
+  }
+
+  func testNormalizedDeltaOutsideUnitRangeReturnsIndexedTypedError() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let decoder = try AppleRawDecoder()
+
+    do {
+      _ = try await decoder.preview(
+        sourceURL: fixture.source,
+        recipe: makeRecipe(operations: [.contrast(1.01)]),
+        maximumPixelDimension: nil
+      )
+      XCTFail("Expected invalid operation value error")
+    } catch let error as RenderCoreError {
+      XCTAssertEqual(error, .invalidOperationValue(index: 0, operation: "contrast"))
+    }
+  }
+
+  func testUnsupportedRenderSchemaVersionReturnsTypedError() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let decoder = try AppleRawDecoder()
+    let recipe = EditRecipe(
+      assetID: UUID(),
+      pins: EnginePins(
+        decoderIdentifier: "com.apple.coreimage",
+        decoderVersion: "system-default",
+        renderSchemaVersion: 2,
+        cameraProfileVersion: nil,
+        modelVersions: [:]
+      )
+    )
+
+    do {
+      _ = try await decoder.preview(
+        sourceURL: fixture.source,
+        recipe: recipe,
+        maximumPixelDimension: nil
+      )
+      XCTFail("Expected unsupported render schema error")
+    } catch let error as RenderCoreError {
+      XCTAssertEqual(error, .unsupportedRenderSchemaVersion(2))
+    }
+  }
+
+  private func makeFixture() throws -> (directory: URL, source: URL) {
+    let directory = try DeterministicImageFixture.makeDirectory()
+    return (directory, try DeterministicImageFixture.makePNG(in: directory))
+  }
+
+  private func makeRecipe(operations: [EditOperation] = []) -> EditRecipe {
+    EditRecipe(
+      assetID: UUID(uuidString: "00000000-0000-0000-0000-000000000005")!,
+      pins: EnginePins(
+        decoderIdentifier: "com.apple.coreimage",
+        decoderVersion: "system-default",
+        renderSchemaVersion: 1,
+        cameraProfileVersion: nil,
+        modelVersions: [:]
+      ),
+      operations: operations
+    )
+  }
+
+  private func middlePixel(
+    of image: CGImage
+  ) throws -> (red: UInt8, green: UInt8, blue: UInt8, alpha: UInt8) {
+    let data = try DeterministicImageFixture.rgba8Data(from: image)
+    return DeterministicImageFixture.pixel(
+      x: image.width / 2,
+      y: image.height / 2,
+      width: image.width,
+      in: data
+    )
+  }
+}
