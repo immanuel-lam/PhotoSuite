@@ -4,7 +4,7 @@ import Foundation
 
 public enum JSONValue: Codable, Hashable, Sendable {
   case string(String)
-  case number(Double)
+  case number(Decimal)
   case bool(Bool)
   case object([String: JSONValue])
   case array([JSONValue])
@@ -17,7 +17,7 @@ public enum JSONValue: Codable, Hashable, Sendable {
       self = .null
     } else if let value = try? container.decode(Bool.self) {
       self = .bool(value)
-    } else if let value = try? container.decode(Double.self) {
+    } else if let value = try? container.decode(Decimal.self) {
       self = .number(value)
     } else if let value = try? container.decode(String.self) {
       self = .string(value)

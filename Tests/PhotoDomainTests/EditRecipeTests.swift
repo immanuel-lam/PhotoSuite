@@ -103,6 +103,22 @@ final class EditRecipeTests: XCTestCase {
     )
   }
 
+  func testUnknownEditOperationPreservesIntegerAboveDoublePrecision() throws {
+    let encoded = Data(
+      #"{"kind":"futureSequence","sequence":9007199254740993}"#.utf8
+    )
+    let operation = try JSONDecoder().decode(EditOperation.self, from: encoded)
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+
+    let reencoded = try encoder.encode(operation)
+
+    XCTAssertEqual(
+      String(decoding: reencoded, as: UTF8.self),
+      #"{"kind":"futureSequence","sequence":9007199254740993}"#
+    )
+  }
+
   func testUnknownMaskKindSurvivesJSONRoundTrip() throws {
     let encoded = Data(#""future-model-mask""#.utf8)
 
