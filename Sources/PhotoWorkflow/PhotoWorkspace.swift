@@ -1,0 +1,668 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+import Foundation
+import Observation
+import PhotoDomain
+
+@MainActor
+@Observable
+public final class PhotoWorkspace {
+  public var section: WorkspaceSection = .library
+  public var assets: [PhotoAsset] = []
+  public var selectedAssetID: UUID?
+  public var currentRecipe: EditRecipe?
+  public var preview: PreviewFrame?
+  public var itemErrors: [WorkspaceItemError] = []
+  public var errorMessage: String?
+  public var lastError: PhotoWorkspaceError?
+  public var searchText = ""
+  public var isLoading = false
+  public var isExporting = false
+  public var isImporting = false
+  public var isChoosingExportDestination = false
+  public var proofMode = false
+  public var showsBefore = false
+  public var lastExport: DurableDerivative?
+
+  public var selectedAsset: PhotoAsset? {
+    guard let selectedAssetID else { return nil }
+    return assets.first { $0.id == selectedAssetID }
+  }
+
+  public var filteredAssets: [PhotoAsset] {
+    guard !searchText.isEmpty else { return assets }
+    return assets.filter { $0.filename.localizedCaseInsensitiveContains(searchText) }
+  }
+
+  public var canUndo: Bool { !undoStack.isEmpty }
+  public var canRedo: Bool { !redoStack.isEmpty }
+
+  public func cachedPreview(for assetID: UUID) -> PreviewFrame? {
+    previewCache[assetID]
+  }
+
+  private let catalog: any CatalogStore
+  private let renderer: any RenderEngine
+  private let exporter: any Exporter
+  private let sourceAccess: SourceAccessOperations
+  private let fingerprint: @Sendable (URL) async throws -> SourceFingerprint
+  private let probe: @Sendable (URL) async throws -> SourceProbe
+  private let now: @Sendable () -> Date
+  private let previewDebounce: @Sendable () async throws -> Void
+  private var previewCache: [UUID: PreviewFrame] = [:]
+  private var draftValues: [AdjustmentKind: Double] = [:]
+  private var undoStack: [[EditOperation]] = []
+  private var redoStack: [[EditOperation]] = []
+  private var previewGeneration: UInt64 = 0
+  @ObservationIgnored private var previewTask: Task<RenderResult, any Error>?
+  @ObservationIgnored private var scheduledPreviewTask: Task<Void, Never>?
+  @ObservationIgnored private var editMutationTail: Task<Void, Never>?
+  private var editMutationGeneration: UInt64 = 0
+
+  public init(
+    catalog: any CatalogStore,
+    renderer: any RenderEngine,
+    exporter: any Exporter,
+    sourceAccess: SourceAccessOperations,
+    fingerprint: @escaping @Sendable (URL) async throws -> SourceFingerprint,
+    probe: @escaping @Sendable (URL) async throws -> SourceProbe,
+    now: @escaping @Sendable () -> Date = { Date() },
+    previewDebounce: @escaping @Sendable () async throws -> Void = {
+      try await Task.sleep(for: .milliseconds(160))
+    }
+  ) {
+    self.catalog = catalog
+    self.renderer = renderer
+    self.exporter = exporter
+    self.sourceAccess = sourceAccess
+    self.fingerprint = fingerprint
+    self.probe = probe
+    self.now = now
+    self.previewDebounce = previewDebounce
+  }
+
+  deinit {
+    previewTask?.cancel()
+    scheduledPreviewTask?.cancel()
+    editMutationTail?.cancel()
+  }
+
+  public func reopen() async {
+    isLoading = true
+    errorMessage = nil
+    lastError = nil
+    itemErrors = []
+    defer { isLoading = false }
+
+    do {
+      assets = try await catalog.listAssets(
+        CatalogAssetListRequest(order: .importDateDescending)
+      ).assets
+      selectedAssetID = nil
+      currentRecipe = nil
+      preview = nil
+
+      var availableAssetIDs: [UUID] = []
+      for index in assets.indices {
+        let asset = assets[index]
+        do {
+          _ = try await sourceAccess.resolve(asset)
+          availableAssetIDs.append(asset.id)
+          if asset.isMissing {
+            let result = try await catalog.markAssetMissing(
+              CatalogMarkMissingRequest(assetID: asset.id, isMissing: false)
+            )
+            assets[index] = result.asset
+          }
+        } catch {
+          do {
+            let result = try await catalog.markAssetMissing(
+              CatalogMarkMissingRequest(assetID: asset.id, isMissing: true)
+            )
+            assets[index] = result.asset
+          } catch {
+            itemErrors.append(
+              WorkspaceItemError(sourceURL: asset.sourceURL, message: message(for: error))
+            )
+          }
+        }
+      }
+
+      for assetID in availableAssetIDs {
+        guard
+          let recipe = try await catalog.latestRecipe(
+            CatalogLatestRecipeRequest(assetID: assetID)
+          ).recipe
+        else {
+          continue
+        }
+        selectedAssetID = assetID
+        currentRecipe = recipe
+        resetHistory()
+        syncDraftValues()
+        await refreshPreview()
+        return
+      }
+    } catch {
+      record(error, operation: "reopen")
+    }
+  }
+
+  public func importURLs(_ urls: [URL]) async {
+    isLoading = true
+    errorMessage = nil
+    lastError = nil
+    itemErrors = []
+    var imported: [(PhotoAsset, EditRecipe)] = []
+
+    for url in urls {
+      let started = await sourceAccess.start(url)
+      do {
+        let sourceFingerprint = try await fingerprint(url)
+        let sourceProbe = try await probe(url)
+        guard
+          let asset = PhotoAsset(
+            sourceURL: url,
+            filename: url.lastPathComponent,
+            typeIdentifier: sourceProbe.typeIdentifier,
+            fingerprint: sourceFingerprint,
+            importDate: now(),
+            captureDate: nil,
+            pixelDimensions: sourceProbe.dimensions
+          )
+        else {
+          throw PhotoWorkspaceError.invalidAsset(url)
+        }
+        _ = try await catalog.upsertAsset(CatalogAssetUpsertRequest(asset: asset))
+        let recipe = EditRecipe(assetID: asset.id, date: now(), pins: sourceProbe.pins)
+        do {
+          _ = try await catalog.saveRecipe(CatalogRecipeSaveRequest(recipe: recipe))
+        } catch {
+          let missingAsset = await markImportedAssetMissing(asset)
+          imported.append((missingAsset, recipe))
+          recordItemError(url: url, error: error, operation: "import.recipe")
+          if started { await sourceAccess.stop(url) }
+          continue
+        }
+
+        var visibleAsset = asset
+        do {
+          try await sourceAccess.persist(asset.id, url)
+        } catch {
+          visibleAsset = await markImportedAssetMissing(asset)
+          recordItemError(url: url, error: error, operation: "import.bookmark")
+        }
+        imported.append((visibleAsset, recipe))
+
+        do {
+          let result = try await renderer.render(renderRequest(url: url, recipe: recipe))
+          previewCache[asset.id] = PreviewFrame(result)
+        } catch is CancellationError {
+          // Cancellation is a normal result for rebuildable previews.
+        } catch {
+          itemErrors.append(
+            WorkspaceItemError(sourceURL: url, message: "Preview: \(message(for: error))")
+          )
+        }
+      } catch {
+        recordItemError(url: url, error: error, operation: "import")
+      }
+      if started { await sourceAccess.stop(url) }
+    }
+
+    assets.append(contentsOf: imported.map(\.0))
+    if let first = imported.first {
+      selectedAssetID = first.0.id
+      currentRecipe = first.1
+      preview = previewCache[first.0.id]
+      resetHistory()
+      syncDraftValues()
+    }
+    isLoading = false
+  }
+
+  public func selectAsset(_ assetID: UUID) async {
+    guard let asset = assets.first(where: { $0.id == assetID }) else {
+      record(PhotoWorkspaceError.invalidSelection(assetID), operation: "select")
+      return
+    }
+    do {
+      guard
+        let recipe = try await catalog.latestRecipe(
+          CatalogLatestRecipeRequest(assetID: assetID)
+        ).recipe
+      else {
+        throw PhotoWorkspaceError.recipeMissing(assetID)
+      }
+      selectedAssetID = asset.id
+      currentRecipe = recipe
+      preview = previewCache[asset.id]
+      resetHistory()
+      syncDraftValues()
+      await refreshPreview()
+    } catch {
+      record(error, operation: "select")
+    }
+  }
+
+  public func adjustmentValue(_ kind: AdjustmentKind) -> Double {
+    draftValues[kind] ?? 0
+  }
+
+  public func updateDraft(_ kind: AdjustmentKind, value: Double) {
+    draftValues[kind] = value
+    scheduledPreviewTask?.cancel()
+    scheduledPreviewTask = Task { [weak self] in
+      await self?.refreshPreview()
+    }
+  }
+
+  public func commitDraft(_ kind: AdjustmentKind) async {
+    scheduledPreviewTask?.cancel()
+    await commitAdjustment(kind, value: adjustmentValue(kind))
+  }
+
+  public func commitAdjustment(_ kind: AdjustmentKind, value: Double) async {
+    await enqueueEditMutation { [weak self] in
+      await self?.performCommitAdjustment(kind, value: value)
+    }
+  }
+
+  public func rotateClockwise() async {
+    await enqueueEditMutation { [weak self] in await self?.performRotateClockwise() }
+  }
+
+  public func resetCrop() async {
+    await enqueueEditMutation { [weak self] in await self?.performResetCrop() }
+  }
+
+  public func undo() async {
+    await enqueueEditMutation { [weak self] in await self?.performUndo() }
+  }
+
+  public func redo() async {
+    await enqueueEditMutation { [weak self] in await self?.performRedo() }
+  }
+
+  public func resetEdits() async {
+    await enqueueEditMutation { [weak self] in await self?.performResetEdits() }
+  }
+
+  private func performCommitAdjustment(_ kind: AdjustmentKind, value: Double) async {
+    guard value.isFinite else {
+      record(PhotoWorkspaceError.invalidAdjustment(kind.rawValue), operation: "edit")
+      return
+    }
+    guard let recipe = editableRecipe(operation: "edit") else { return }
+    var operations = recipe.operations.filter { !matches($0, kind: kind) }
+    if value != 0 { operations.append(operation(kind, value: value)) }
+    operations = canonicalized(operations)
+    guard operations != recipe.operations else { return }
+    let oldUndo = undoStack
+    let oldRedo = redoStack
+    undoStack.append(recipe.operations)
+    redoStack.removeAll()
+    if !(await saveOperations(operations)) {
+      undoStack = oldUndo
+      redoStack = oldRedo
+    }
+  }
+
+  private func performRotateClockwise() async {
+    guard let recipe = editableRecipe(operation: "rotate") else { return }
+    let current =
+      recipe.operations.compactMap { operation -> Double? in
+        if case .rotationDegrees(let value) = operation { return value }
+        return nil
+      }.last ?? 0
+    var operations = recipe.operations.filter {
+      if case .rotationDegrees = $0 { return false }
+      return true
+    }
+    operations.append(.rotationDegrees((current + 90).truncatingRemainder(dividingBy: 360)))
+    let oldUndo = undoStack
+    let oldRedo = redoStack
+    undoStack.append(recipe.operations)
+    redoStack.removeAll()
+    if !(await saveOperations(canonicalized(operations))) {
+      undoStack = oldUndo
+      redoStack = oldRedo
+    }
+  }
+
+  private func performResetCrop() async {
+    guard let recipe = editableRecipe(operation: "crop") else { return }
+    let operations = recipe.operations.filter {
+      if case .normalizedCrop = $0 { return false }
+      return true
+    }
+    guard operations != recipe.operations else { return }
+    let oldUndo = undoStack
+    let oldRedo = redoStack
+    undoStack.append(recipe.operations)
+    redoStack.removeAll()
+    if !(await saveOperations(canonicalized(operations))) {
+      undoStack = oldUndo
+      redoStack = oldRedo
+    }
+  }
+
+  private func performUndo() async {
+    guard let target = undoStack.popLast(), let current = currentRecipe else { return }
+    let oldUndo = undoStack + [target]
+    let oldRedo = redoStack
+    redoStack.append(current.operations)
+    if !(await saveOperations(target)) {
+      undoStack = oldUndo
+      redoStack = oldRedo
+    }
+  }
+
+  private func performRedo() async {
+    guard let target = redoStack.popLast(), let current = currentRecipe else { return }
+    let oldUndo = undoStack
+    let oldRedo = redoStack + [target]
+    undoStack.append(current.operations)
+    if !(await saveOperations(target)) {
+      undoStack = oldUndo
+      redoStack = oldRedo
+    }
+  }
+
+  private func performResetEdits() async {
+    guard let recipe = editableRecipe(operation: "reset"), !recipe.operations.isEmpty else {
+      return
+    }
+    let oldUndo = undoStack
+    let oldRedo = redoStack
+    undoStack.append(recipe.operations)
+    redoStack.removeAll()
+    if !(await saveOperations([])) {
+      undoStack = oldUndo
+      redoStack = oldRedo
+    }
+  }
+
+  public func toggleBeforeAfter() {
+    guard selectedAsset != nil, currentRecipe != nil else {
+      record(PhotoWorkspaceError.noSelection(operation: "before and after"), operation: "compare")
+      return
+    }
+    showsBefore.toggle()
+    scheduledPreviewTask?.cancel()
+    scheduledPreviewTask = Task { [weak self] in await self?.refreshPreview() }
+  }
+
+  public func refreshPreview() async {
+    guard let asset = selectedAsset, let durableRecipe = currentRecipe else { return }
+    previewGeneration &+= 1
+    let generation = previewGeneration
+    previewTask?.cancel()
+
+    let displayedRecipe = displayRecipe(from: durableRecipe)
+    let sourceAccess = sourceAccess
+    let renderer = renderer
+    let debounce = previewDebounce
+    let task = Task<RenderResult, any Error> {
+      try await debounce()
+      try Task.checkCancellation()
+      let url = try await sourceAccess.resolve(asset)
+      let started = await sourceAccess.start(url)
+      do {
+        let result = try await renderer.render(renderRequest(url: url, recipe: displayedRecipe))
+        if started { await sourceAccess.stop(url) }
+        return result
+      } catch {
+        if started { await sourceAccess.stop(url) }
+        throw error
+      }
+    }
+    previewTask = task
+
+    do {
+      let result = try await task.value
+      guard generation == previewGeneration, selectedAssetID == asset.id else { return }
+      let frame = PreviewFrame(result)
+      previewCache[asset.id] = frame
+      preview = frame
+      errorMessage = nil
+      lastError = nil
+    } catch is CancellationError {
+      // Superseded preview work is expected.
+    } catch {
+      guard generation == previewGeneration, selectedAssetID == asset.id else { return }
+      record(error, operation: "preview")
+    }
+  }
+
+  public func exportJPEG(to destinationURL: URL, quality: Double) async {
+    lastExport = nil
+    lastError = nil
+    guard let asset = selectedAsset, let recipe = currentRecipe else {
+      record(PhotoWorkspaceError.noSelection(operation: "export"), operation: "export")
+      return
+    }
+    isExporting = true
+    errorMessage = nil
+    defer { isExporting = false }
+    do {
+      let url = try await sourceAccess.resolve(asset)
+      let started = await sourceAccess.start(url)
+      do {
+        let result = try await exporter.export(
+          ExportRequest(
+            sourceURL: url,
+            recipe: recipe,
+            destinationURL: destinationURL,
+            format: .jpeg,
+            quality: quality
+          )
+        )
+        if started { await sourceAccess.stop(url) }
+        lastExport = result.derivative
+      } catch {
+        if started { await sourceAccess.stop(url) }
+        throw error
+      }
+    } catch is CancellationError {
+      // User cancellation does not create an error banner.
+    } catch {
+      record(error, operation: "export")
+    }
+  }
+
+  private func saveOperations(_ operations: [EditOperation]) async -> Bool {
+    guard let current = currentRecipe else { return false }
+    let recipe = EditRecipe(
+      assetID: current.assetID,
+      revision: current.revision + 1,
+      date: now(),
+      pins: current.pins,
+      operations: operations,
+      masks: current.masks
+    )
+    do {
+      let saved = try await catalog.saveRecipe(CatalogRecipeSaveRequest(recipe: recipe)).recipe
+      currentRecipe = saved
+      syncDraftValues()
+      await refreshPreview()
+      lastError = nil
+      return true
+    } catch {
+      record(error, operation: "edit.save")
+      return false
+    }
+  }
+
+  private func displayRecipe(from durableRecipe: EditRecipe) -> EditRecipe {
+    var operations = durableRecipe.operations
+    if showsBefore {
+      operations = []
+    } else if durableRecipe.operations.contains(where: isUnknownOperation) {
+      operations = durableRecipe.operations
+    } else {
+      for kind in AdjustmentKind.allCases {
+        operations.removeAll { matches($0, kind: kind) }
+        if let value = draftValues[kind] {
+          operations.append(operation(kind, value: value))
+        }
+      }
+      operations = canonicalized(operations)
+    }
+    return EditRecipe(
+      assetID: durableRecipe.assetID,
+      revision: durableRecipe.revision,
+      date: durableRecipe.date,
+      pins: durableRecipe.pins,
+      operations: operations,
+      masks: showsBefore ? [] : durableRecipe.masks
+    )
+  }
+
+  private func renderRequest(url: URL, recipe: EditRecipe) -> RenderRequest {
+    RenderRequest(
+      sourceURL: url,
+      recipe: recipe,
+      maximumPixelDimension: 2_560,
+      outputColorSpaceName: "extended-linear-display-p3"
+    )
+  }
+
+  private func resetHistory() {
+    undoStack.removeAll()
+    redoStack.removeAll()
+  }
+
+  private func enqueueEditMutation(
+    _ mutation: @escaping @MainActor @Sendable () async -> Void
+  ) async {
+    let previous = editMutationTail
+    editMutationGeneration &+= 1
+    let generation = editMutationGeneration
+    let task = Task { @MainActor in
+      await previous?.value
+      guard !Task.isCancelled else { return }
+      await mutation()
+    }
+    editMutationTail = task
+    await task.value
+    if generation == editMutationGeneration { editMutationTail = nil }
+  }
+
+  private func editableRecipe(operation: String) -> EditRecipe? {
+    guard let recipe = currentRecipe else {
+      record(PhotoWorkspaceError.noSelection(operation: operation), operation: operation)
+      return nil
+    }
+    guard !recipe.operations.contains(where: isUnknownOperation) else {
+      record(PhotoWorkspaceError.unknownOperationsBlockEditing, operation: operation)
+      return nil
+    }
+    return recipe
+  }
+
+  private func isUnknownOperation(_ operation: EditOperation) -> Bool {
+    if case .unknown = operation { return true }
+    return false
+  }
+
+  private func markImportedAssetMissing(_ asset: PhotoAsset) async -> PhotoAsset {
+    do {
+      return try await catalog.markAssetMissing(
+        CatalogMarkMissingRequest(assetID: asset.id, isMissing: true)
+      ).asset
+    } catch {
+      return PhotoAsset(
+        id: asset.id,
+        sourceURL: asset.sourceURL,
+        filename: asset.filename,
+        typeIdentifier: asset.typeIdentifier,
+        fingerprint: asset.fingerprint,
+        importDate: asset.importDate,
+        captureDate: asset.captureDate,
+        pixelDimensions: asset.pixelDimensions,
+        rating: asset.rating,
+        colorLabel: asset.colorLabel,
+        isMissing: true
+      ) ?? asset
+    }
+  }
+
+  private func recordItemError(url: URL, error: any Error, operation: String) {
+    let typed = typedError(error, operation: operation)
+    lastError = typed
+    errorMessage = typed.localizedDescription
+    itemErrors.append(WorkspaceItemError(sourceURL: url, message: typed.localizedDescription))
+  }
+
+  private func record(_ error: any Error, operation: String) {
+    let typed = typedError(error, operation: operation)
+    lastError = typed
+    errorMessage = typed.localizedDescription
+  }
+
+  private func typedError(_ error: any Error, operation: String) -> PhotoWorkspaceError {
+    if let typed = error as? PhotoWorkspaceError { return typed }
+    return .operationFailed(operation: operation, message: message(for: error))
+  }
+
+  private func syncDraftValues() {
+    draftValues.removeAll()
+    for operation in currentRecipe?.operations ?? [] {
+      switch operation {
+      case .exposureEV(let value): draftValues[.exposure] = value
+      case .contrast(let value): draftValues[.contrast] = value
+      case .highlights(let value): draftValues[.highlights] = value
+      case .shadows(let value): draftValues[.shadows] = value
+      case .saturation(let value): draftValues[.saturation] = value
+      default: break
+      }
+    }
+  }
+
+  private func matches(_ operation: EditOperation, kind: AdjustmentKind) -> Bool {
+    switch (operation, kind) {
+    case (.exposureEV, .exposure), (.contrast, .contrast), (.highlights, .highlights),
+      (.shadows, .shadows), (.saturation, .saturation):
+      true
+    default:
+      false
+    }
+  }
+
+  private func operation(_ kind: AdjustmentKind, value: Double) -> EditOperation {
+    switch kind {
+    case .exposure: .exposureEV(value)
+    case .contrast: .contrast(value)
+    case .highlights: .highlights(value)
+    case .shadows: .shadows(value)
+    case .saturation: .saturation(value)
+    }
+  }
+
+  private func canonicalized(_ operations: [EditOperation]) -> [EditOperation] {
+    func rank(_ operation: EditOperation) -> Int {
+      switch operation {
+      case .exposureEV: 0
+      case .contrast: 1
+      case .highlights: 2
+      case .shadows: 3
+      case .saturation: 4
+      case .normalizedCrop: 5
+      case .rotationDegrees: 6
+      case .unknown: 7
+      }
+    }
+    return operations.enumerated().sorted { left, right in
+      let leftRank = rank(left.element)
+      let rightRank = rank(right.element)
+      return leftRank == rightRank ? left.offset < right.offset : leftRank < rightRank
+    }.map(\.element)
+  }
+
+  private func message(for error: any Error) -> String {
+    (error as? any LocalizedError)?.errorDescription ?? error.localizedDescription
+  }
+}

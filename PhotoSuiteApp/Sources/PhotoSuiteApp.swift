@@ -2,14 +2,115 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+import Observation
 import PhotoWorkflow
 import SwiftUI
 
 @main
 struct PhotoSuiteApp: App {
+  @State private var environment = PhotoSuiteEnvironment()
+
   var body: some Scene {
-    WindowGroup {
-      ContentView()
+    WindowGroup("PhotoSuite") {
+      if let workspace = environment.workspace {
+        ContentView(workspace: workspace)
+          .frame(minWidth: 1_100, minHeight: 700)
+      } else {
+        ContentUnavailableView(
+          "PhotoSuite Could Not Start",
+          systemImage: "exclamationmark.triangle",
+          description: Text(environment.startupError ?? "PhotoSuite could not start.")
+        )
+        .accessibilityIdentifier("startup-error")
+        .frame(minWidth: 1_100, minHeight: 700)
+      }
     }
+    .commands {
+      InspectorCommands()
+      PhotoSuiteCommands(workspace: environment.workspace)
+    }
+
+    Settings {
+      PhotoSuiteSettingsView()
+    }
+  }
+}
+
+@MainActor
+@Observable
+private final class PhotoSuiteEnvironment {
+  let workspace: PhotoWorkspace?
+  let startupError: String?
+
+  init() {
+    do {
+      workspace = try PhotoWorkspaceComposition.live()
+      startupError = nil
+    } catch {
+      workspace = nil
+      startupError = error.localizedDescription
+    }
+  }
+}
+
+@MainActor
+private struct PhotoSuiteCommands: Commands {
+  let workspace: PhotoWorkspace?
+
+  var body: some Commands {
+    CommandGroup(after: .newItem) {
+      Button("Import Photographs…") { workspace?.isImporting = true }
+        .keyboardShortcut("i")
+        .disabled(workspace == nil)
+    }
+
+    CommandGroup(replacing: .undoRedo) {
+      Button("Undo Edit") { Task { await workspace?.undo() } }
+        .keyboardShortcut("z")
+        .disabled(workspace?.canUndo != true)
+      Button("Redo Edit") { Task { await workspace?.redo() } }
+        .keyboardShortcut("z", modifiers: [.command, .shift])
+        .disabled(workspace?.canRedo != true)
+    }
+
+    CommandMenu("Photograph") {
+      Button("Library") { workspace?.section = .library }
+        .keyboardShortcut("1", modifiers: .command)
+      Button("Develop") { workspace?.section = .develop }
+        .keyboardShortcut("2", modifiers: .command)
+      Button("Deliver") { workspace?.section = .deliver }
+        .keyboardShortcut("3", modifiers: .command)
+      Divider()
+      Button("Toggle Before and After") { workspace?.toggleBeforeAfter() }
+        .keyboardShortcut("\\")
+        .disabled(workspace?.selectedAsset == nil)
+      Button("Toggle Proof Mode") { workspace?.proofMode.toggle() }
+        .keyboardShortcut("p", modifiers: [.command, .control])
+      Divider()
+      Button("Export JPEG…") { workspace?.isChoosingExportDestination = true }
+        .keyboardShortcut("e")
+        .disabled(workspace?.selectedAsset == nil)
+    }
+  }
+}
+
+private struct PhotoSuiteSettingsView: View {
+  @AppStorage("jpegQuality") private var jpegQuality = 0.9
+
+  var body: some View {
+    Form {
+      LabeledContent("JPEG quality") {
+        Slider(value: $jpegQuality, in: 0.4...1, step: 0.01)
+          .frame(width: 220)
+        Text(jpegQuality, format: .percent.precision(.fractionLength(0)))
+          .monospacedDigit()
+          .frame(width: 44, alignment: .trailing)
+      }
+      Text("Previews are rebuildable and remain in memory for this version.")
+        .foregroundStyle(.secondary)
+    }
+    .formStyle(.grouped)
+    .padding()
+    .frame(width: 520, height: 180)
   }
 }
