@@ -6,4 +6,20 @@ import XCTest
 
 @testable import RenderCore
 
-final class RenderCoreTests: XCTestCase {}
+final class RenderCoreTests: XCTestCase {
+  func testRenderErrorsProvideUsefulLocalizedDescriptions() {
+    let emptyPin = RenderCoreError.unsupportedDecoderVersion("")
+    let renderFailed = RenderCoreError.renderFailed
+    let localizedEmptyPin: any LocalizedError = emptyPin
+    let localizedRenderFailure: any LocalizedError = renderFailed
+
+    XCTAssertEqual(
+      localizedEmptyPin.errorDescription,
+      "The pinned RAW decoder version is empty and is not supported."
+    )
+    XCTAssertEqual(
+      localizedRenderFailure.errorDescription,
+      "The image could not be rendered."
+    )
+  }
+}

@@ -23,10 +23,7 @@ public enum PhotoWorkspaceComposition {
         persist: { assetID, _ in _ = try await catalog.createBookmark(forAssetID: assetID) },
         resolve: { asset in
           let resolved = try await catalog.resolveBookmark(forAssetID: asset.id)
-          guard FileManager.default.fileExists(atPath: resolved.url.path) else {
-            throw PhotoWorkspaceError.sourceMissing(resolved.url)
-          }
-          return resolved.url
+          return try validatedSourceURL(resolved.url)
         },
         start: { url in url.startAccessingSecurityScopedResource() },
         stop: { url in url.stopAccessingSecurityScopedResource() }
@@ -61,5 +58,21 @@ public enum PhotoWorkspaceComposition {
     let directory = applicationSupport.appendingPathComponent("PhotoSuite", isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     return directory.appendingPathComponent("PhotoSuite.sqlite")
+  }
+
+  nonisolated static func validatedSourceURL(
+    _ url: URL,
+    start: (URL) -> Bool = { $0.startAccessingSecurityScopedResource() },
+    stop: (URL) -> Void = { $0.stopAccessingSecurityScopedResource() },
+    fileExists: (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) }
+  ) throws -> URL {
+    let started = start(url)
+    defer {
+      if started { stop(url) }
+    }
+    guard fileExists(url) else {
+      throw PhotoWorkspaceError.sourceMissing(url)
+    }
+    return url
   }
 }

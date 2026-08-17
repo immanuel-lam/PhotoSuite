@@ -8,6 +8,63 @@ import XCTest
 
 @MainActor
 final class PhotoWorkspaceTests: XCTestCase {
+  func testLiveSourceValidationChecksExistenceInsideBalancedSecurityScope() throws {
+    let url = URL(fileURLWithPath: "/outside-container/photo.png")
+    var isActive = false
+    var stopCount = 0
+
+    let validated = try PhotoWorkspaceComposition.validatedSourceURL(
+      url,
+      start: { candidate in
+        XCTAssertEqual(candidate, url)
+        isActive = true
+        return true
+      },
+      stop: { candidate in
+        XCTAssertEqual(candidate, url)
+        isActive = false
+        stopCount += 1
+      },
+      fileExists: { candidate in
+        XCTAssertEqual(candidate, url)
+        XCTAssertTrue(isActive)
+        return true
+      }
+    )
+
+    XCTAssertEqual(validated, url)
+    XCTAssertFalse(isActive)
+    XCTAssertEqual(stopCount, 1)
+  }
+
+  func testLiveSourceValidationStopsSecurityScopeWhenSourceIsMissing() {
+    let url = URL(fileURLWithPath: "/outside-container/missing.png")
+    var isActive = false
+    var stopCount = 0
+
+    XCTAssertThrowsError(
+      try PhotoWorkspaceComposition.validatedSourceURL(
+        url,
+        start: { _ in
+          isActive = true
+          return true
+        },
+        stop: { _ in
+          isActive = false
+          stopCount += 1
+        },
+        fileExists: { _ in
+          XCTAssertTrue(isActive)
+          return false
+        }
+      )
+    ) { error in
+      XCTAssertEqual(error as? PhotoWorkspaceError, .sourceMissing(url))
+    }
+    XCTAssertFalse(isActive)
+    XCTAssertEqual(stopCount, 1)
+  }
+
   func testReopenSelectsFirstAvailableAssetAndRestoresItsLatestRecipe() async throws {
     let missing = makeAsset(name: "A-missing.raw", date: Date(timeIntervalSince1970: 20))
     let available = makeAsset(
@@ -32,6 +89,85 @@ final class PhotoWorkspaceTests: XCTestCase {
     let activeAccessCount = await access.activeAccessCount()
     XCTAssertEqual(missingUpdates, [missing.id: true, available.id: false])
     XCTAssertEqual(activeAccessCount, 0)
+  }
+
+  func testReopenRepairsEmptyRAWPinWithMonotonicRecipeInsideSourceAccess() async throws {
+    let asset = makeAsset(name: "legacy.png")
+    let mask = MaskDefinition(
+      schemaVersion: 1,
+      kind: .subject,
+      name: "Subject",
+      isInverted: false,
+      payload: Data([1, 2, 3])
+    )
+    let legacy = EditRecipe(
+      assetID: asset.id,
+      revision: 7,
+      date: Date(timeIntervalSince1970: 7),
+      pins: EnginePins(
+        decoderIdentifier: "com.apple.ciraw",
+        decoderVersion: "",
+        renderSchemaVersion: 1,
+        cameraProfileVersion: "legacy-profile",
+        modelVersions: ["subject": "1"]
+      ),
+      operations: [.exposureEV(0.75), .rotationDegrees(90)],
+      masks: [mask]
+    )
+    let correctedPins = EnginePins(
+      decoderIdentifier: "com.apple.coreimage.common-image",
+      decoderVersion: "system-default",
+      renderSchemaVersion: 1,
+      cameraProfileVersion: nil,
+      modelVersions: [:]
+    )
+    let catalog = CatalogSpy(assets: [asset], recipes: [asset.id: legacy])
+    let access = SourceAccessSpy()
+    let phases = AccessPhaseRecorder()
+    let renderer = RecipeRecordingRenderer(access: access)
+    let workspace = PhotoWorkspace(
+      catalog: catalog,
+      renderer: renderer,
+      exporter: ExporterSpy(),
+      sourceAccess: access.operations,
+      fingerprint: { _ in
+        XCTFail("Pin recovery must not fingerprint or change the source.")
+        throw TestError.unused
+      },
+      probe: { url in
+        await phases.record("probe", active: access.isActive)
+        XCTAssertEqual(url, asset.sourceURL)
+        return SourceProbe(
+          dimensions: asset.pixelDimensions!,
+          pins: correctedPins,
+          typeIdentifier: asset.typeIdentifier
+        )
+      },
+      now: { Date(timeIntervalSince1970: 100) },
+      previewDebounce: {}
+    )
+
+    await workspace.reopen()
+
+    let recovered = try XCTUnwrap(workspace.currentRecipe)
+    let savedRecipes = await catalog.savedRecipes()
+    let saved = try XCTUnwrap(savedRecipes.last)
+    let renderedRecipe = await renderer.lastRecipe()
+    let rendered = try XCTUnwrap(renderedRecipe)
+    let phaseValues = await phases.values()
+    let renderAccess = await renderer.wasAccessActive()
+    let activeAccessCount = await access.activeAccessCount()
+    XCTAssertEqual(recovered, saved)
+    XCTAssertEqual(recovered, rendered)
+    XCTAssertEqual(recovered.revision, 8)
+    XCTAssertEqual(recovered.date, Date(timeIntervalSince1970: 100))
+    XCTAssertEqual(recovered.pins, correctedPins)
+    XCTAssertEqual(recovered.operations, legacy.operations)
+    XCTAssertEqual(recovered.masks, legacy.masks)
+    XCTAssertEqual(phaseValues, ["probe": true])
+    XCTAssertTrue(renderAccess)
+    XCTAssertEqual(activeAccessCount, 0)
+    XCTAssertNil(workspace.errorMessage)
   }
 
   func testImportRetainsSuccessfulFilesWhenOneFingerprintFails() async throws {
@@ -547,6 +683,27 @@ private actor ImmediateRenderer: RenderEngine {
     )
   }
 
+  func wasAccessActive() -> Bool { accessWasActive }
+}
+
+private actor RecipeRecordingRenderer: RenderEngine {
+  private let access: SourceAccessSpy
+  private var recipe: EditRecipe?
+  private var accessWasActive = false
+
+  init(access: SourceAccessSpy) { self.access = access }
+
+  func render(_ request: RenderRequest) async throws -> RenderResult {
+    recipe = request.recipe
+    accessWasActive = await access.isActive
+    return RenderResult(
+      imageData: Data("recovered-preview".utf8),
+      typeIdentifier: "public.png",
+      pixelDimensions: PixelDimensions(width: 20, height: 10)!
+    )
+  }
+
+  func lastRecipe() -> EditRecipe? { recipe }
   func wasAccessActive() -> Bool { accessWasActive }
 }
 

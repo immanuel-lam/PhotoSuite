@@ -6,6 +6,11 @@ import Foundation
 import Observation
 import PhotoDomain
 
+private struct PreviewTaskOutput: Sendable {
+  let result: RenderResult
+  let recoveredRecipe: EditRecipe?
+}
+
 @MainActor
 @Observable
 public final class PhotoWorkspace {
@@ -56,7 +61,7 @@ public final class PhotoWorkspace {
   private var undoStack: [[EditOperation]] = []
   private var redoStack: [[EditOperation]] = []
   private var previewGeneration: UInt64 = 0
-  @ObservationIgnored private var previewTask: Task<RenderResult, any Error>?
+  @ObservationIgnored private var previewTask: Task<PreviewTaskOutput, any Error>?
   @ObservationIgnored private var scheduledPreviewTask: Task<Void, Never>?
   @ObservationIgnored private var editMutationTail: Task<Void, Never>?
   private var editMutationGeneration: UInt64 = 0
@@ -404,16 +409,61 @@ public final class PhotoWorkspace {
     let displayedRecipe = displayRecipe(from: durableRecipe)
     let sourceAccess = sourceAccess
     let renderer = renderer
+    let catalog = catalog
+    let probe = probe
+    let now = now
     let debounce = previewDebounce
-    let task = Task<RenderResult, any Error> {
+    let needsPinRecovery = Self.needsEmptyRAWPinRecovery(durableRecipe.pins)
+    let task = Task<PreviewTaskOutput, any Error> {
       try await debounce()
       try Task.checkCancellation()
       let url = try await sourceAccess.resolve(asset)
       let started = await sourceAccess.start(url)
       do {
-        let result = try await renderer.render(renderRequest(url: url, recipe: displayedRecipe))
+        let recoveredRecipe: EditRecipe?
+        let recipeForRender: EditRecipe
+        if needsPinRecovery {
+          let sourceProbe = try await probe(url)
+          guard !Self.needsEmptyRAWPinRecovery(sourceProbe.pins) else {
+            throw PhotoWorkspaceError.operationFailed(
+              operation: "preview.recover",
+              message: "The source still reports an empty RAW decoder pin."
+            )
+          }
+          let (revision, overflow) = durableRecipe.revision.addingReportingOverflow(1)
+          guard !overflow else {
+            throw PhotoWorkspaceError.operationFailed(
+              operation: "preview.recover",
+              message: "The recipe revision cannot be incremented."
+            )
+          }
+          let repaired = EditRecipe(
+            assetID: durableRecipe.assetID,
+            revision: revision,
+            date: now(),
+            pins: sourceProbe.pins,
+            operations: durableRecipe.operations,
+            masks: durableRecipe.masks
+          )
+          recoveredRecipe = try await catalog.saveRecipe(
+            CatalogRecipeSaveRequest(recipe: repaired)
+          ).recipe
+          recipeForRender = EditRecipe(
+            assetID: displayedRecipe.assetID,
+            revision: revision,
+            date: repaired.date,
+            pins: sourceProbe.pins,
+            operations: displayedRecipe.operations,
+            masks: displayedRecipe.masks
+          )
+        } else {
+          recoveredRecipe = nil
+          recipeForRender = displayedRecipe
+        }
+        try Task.checkCancellation()
+        let result = try await renderer.render(renderRequest(url: url, recipe: recipeForRender))
         if started { await sourceAccess.stop(url) }
-        return result
+        return PreviewTaskOutput(result: result, recoveredRecipe: recoveredRecipe)
       } catch {
         if started { await sourceAccess.stop(url) }
         throw error
@@ -422,9 +472,12 @@ public final class PhotoWorkspace {
     previewTask = task
 
     do {
-      let result = try await task.value
+      let output = try await task.value
       guard generation == previewGeneration, selectedAssetID == asset.id else { return }
-      let frame = PreviewFrame(result)
+      if let recoveredRecipe = output.recoveredRecipe {
+        currentRecipe = recoveredRecipe
+      }
+      let frame = PreviewFrame(output.result)
       previewCache[asset.id] = frame
       preview = frame
       errorMessage = nil
@@ -528,6 +581,10 @@ public final class PhotoWorkspace {
       maximumPixelDimension: 2_560,
       outputColorSpaceName: "extended-linear-display-p3"
     )
+  }
+
+  private static func needsEmptyRAWPinRecovery(_ pins: EnginePins) -> Bool {
+    pins.decoderIdentifier == "com.apple.ciraw" && pins.decoderVersion.isEmpty
   }
 
   private func resetHistory() {

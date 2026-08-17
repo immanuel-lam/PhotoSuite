@@ -166,7 +166,8 @@ public actor AppleRawDecoder: RawDecoder {
     try Task.checkCancellation()
     let versions: [String]
     if let sourceURL = request.sourceURL,
-      let raw = rawFilterProvider.makeFilter(imageURL: sourceURL)
+      let raw = rawFilterProvider.makeFilter(imageURL: sourceURL),
+      isRealRAWFilter(raw)
     {
       versions = raw.supportedDecoderVersions
     } else {
@@ -421,7 +422,7 @@ public actor AppleRawDecoder: RawDecoder {
       throw RenderCoreError.unreadableSource(sourceURL)
     }
 
-    if let raw = rawFilterProvider.makeFilter(imageURL: sourceURL) {
+    if let raw = rawFilterProvider.makeFilter(imageURL: sourceURL), isRealRAWFilter(raw) {
       if let decoderVersion {
         guard raw.selectDecoderVersion(decoderVersion) else {
           throw RenderCoreError.unsupportedDecoderVersion(decoderVersion)
@@ -454,6 +455,18 @@ public actor AppleRawDecoder: RawDecoder {
       throw RenderCoreError.corruptSource(sourceURL)
     }
     throw RenderCoreError.unsupportedSource(sourceURL)
+  }
+
+  private func isRealRAWFilter(_ raw: any AppleRAWFilterAccess) -> Bool {
+    !raw.decoderVersion.isEmpty
+      && !isNoRAWDecoderVersion(raw.decoderVersion)
+      && raw.supportedDecoderVersions.contains { version in
+        !version.isEmpty && !isNoRAWDecoderVersion(version)
+      }
+  }
+
+  private func isNoRAWDecoderVersion(_ version: String) -> Bool {
+    version.caseInsensitiveCompare("None") == .orderedSame
   }
 
   private func normalized(_ image: CIImage, sourceURL: URL) throws -> CIImage {

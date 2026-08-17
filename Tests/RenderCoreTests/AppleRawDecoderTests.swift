@@ -7,11 +7,77 @@ import CoreImage
 import Foundation
 import ImageIO
 import PhotoDomain
+import UniformTypeIdentifiers
 import XCTest
 
 @testable import RenderCore
 
 final class AppleRawDecoderTests: XCTestCase {
+  func testSystemDecoderFallsBackToCommonImageForPNGAndRendersWithoutSourceMutation() async throws {
+    let directory = try DeterministicImageFixture.makeDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let source = try DeterministicImageFixture.makePNG(in: directory)
+    let sourceChecksum = try DeterministicImageFixture.checksum(of: source)
+    let decoder = try AppleRawDecoder()
+
+    let decoded = try await decoder.decode(RawDecodeRequest(sourceURL: source))
+    let recipe = EditRecipe(
+      assetID: UUID(),
+      pins: EnginePins(
+        decoderIdentifier: decoded.decoderIdentifier,
+        decoderVersion: decoded.decoderVersion,
+        renderSchemaVersion: 1,
+        cameraProfileVersion: nil,
+        modelVersions: [:]
+      )
+    )
+    let rendered = try await CoreImageRenderEngine(decoder: decoder).render(
+      RenderRequest(
+        sourceURL: source,
+        recipe: recipe,
+        maximumPixelDimension: 2_560,
+        outputColorSpaceName: "extended-linear-display-p3"
+      )
+    )
+
+    XCTAssertEqual(decoded.decoderIdentifier, "com.apple.coreimage.common-image")
+    XCTAssertEqual(decoded.decoderVersion, "system-default")
+    XCTAssertEqual(rendered.pixelDimensions, PixelDimensions(width: 8, height: 6))
+    XCTAssertEqual(rendered.typeIdentifier, UTType.png.identifier)
+    XCTAssertEqual(try DeterministicImageFixture.checksum(of: source), sourceChecksum)
+  }
+
+  func testSystemDecoderFallsBackToCommonImageForJPEGAndRenders() async throws {
+    let directory = try DeterministicImageFixture.makeDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let source = try DeterministicImageFixture.makeJPEG(in: directory)
+    let decoder = try AppleRawDecoder()
+
+    let decoded = try await decoder.decode(RawDecodeRequest(sourceURL: source))
+    let recipe = EditRecipe(
+      assetID: UUID(),
+      pins: EnginePins(
+        decoderIdentifier: decoded.decoderIdentifier,
+        decoderVersion: decoded.decoderVersion,
+        renderSchemaVersion: 1,
+        cameraProfileVersion: nil,
+        modelVersions: [:]
+      )
+    )
+    let rendered = try await CoreImageRenderEngine(decoder: decoder).render(
+      RenderRequest(
+        sourceURL: source,
+        recipe: recipe,
+        maximumPixelDimension: 2_560,
+        outputColorSpaceName: "extended-linear-display-p3"
+      )
+    )
+
+    XCTAssertEqual(decoded.decoderIdentifier, "com.apple.coreimage.common-image")
+    XCTAssertEqual(decoded.decoderVersion, "system-default")
+    XCTAssertEqual(rendered.pixelDimensions, PixelDimensions(width: 8, height: 6))
+  }
+
   func testWorkingColorSpaceUsesExtendedRange() async throws {
     let decoder = try DeterministicImageFixture.makeCommonImageDecoder()
 

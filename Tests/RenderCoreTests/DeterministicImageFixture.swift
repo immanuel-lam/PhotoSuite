@@ -90,6 +90,32 @@ enum DeterministicImageFixture {
     return url
   }
 
+  static func makeJPEG(in directory: URL, name: String = "fixture.jpg") throws -> URL {
+    let png = try makePNG(in: directory, name: "jpeg-source.png")
+    guard
+      let source = CGImageSourceCreateWithURL(png as CFURL, nil),
+      let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+    else {
+      throw FixtureError.imageCreationFailed
+    }
+    let destinationURL = directory.appendingPathComponent(name)
+    guard
+      let destination = CGImageDestinationCreateWithURL(
+        destinationURL as CFURL,
+        UTType.jpeg.identifier as CFString,
+        1,
+        nil
+      )
+    else {
+      throw FixtureError.destinationCreationFailed
+    }
+    CGImageDestinationAddImage(destination, image, nil)
+    guard CGImageDestinationFinalize(destination) else {
+      throw FixtureError.encodingFailed
+    }
+    return destinationURL
+  }
+
   static func makeOrientedTIFF(
     in directory: URL,
     name: String = "oriented.tiff"
