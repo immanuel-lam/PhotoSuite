@@ -28,6 +28,45 @@ private final class SQLiteConnection: @unchecked Sendable {
   }
 }
 
+struct SQLiteCatalogBackupFaults: Sendable {
+  let stepCode: Int32?
+  let finishCode: Int32?
+  let closeCode: Int32?
+  let filesystemCleanupMessage: String?
+
+  init(
+    stepCode: Int32? = nil,
+    finishCode: Int32? = nil,
+    closeCode: Int32? = nil,
+    filesystemCleanupMessage: String? = nil
+  ) {
+    self.stepCode = stepCode
+    self.finishCode = finishCode
+    self.closeCode = closeCode
+    self.filesystemCleanupMessage = filesystemCleanupMessage
+  }
+
+  static let none = SQLiteCatalogBackupFaults()
+}
+
+private struct SQLiteSchemaColumn: Equatable {
+  let position: Int32
+  let name: String
+  let type: String
+  let isNotNull: Bool
+  let defaultValue: String?
+  let primaryKeyPosition: Int32
+}
+
+private struct SQLiteIndexColumn: Equatable {
+  let sequence: Int32
+  let tableColumn: Int32
+  let name: String?
+  let isDescending: Bool
+  let collation: String?
+  let isKey: Bool
+}
+
 public actor SQLiteCatalogStore: CatalogStore, JobEngine {
   private static let schemaVersion: Int64 = 1
   private let connection: SQLiteConnection
@@ -35,15 +74,21 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
   private let encoder: JSONEncoder
   private let decoder: JSONDecoder
   private let catalogURL: URL
+  private let backupFaults: SQLiteCatalogBackupFaults
   private var isUsable = true
 
   private var database: OpaquePointer { connection.database }
 
   public init(catalogURL: URL) throws {
-    try self.init(catalogURL: catalogURL, ftsAvailabilityOverride: nil)
+    try self.init(
+      catalogURL: catalogURL, ftsAvailabilityOverride: nil, backupFaults: .none)
   }
 
-  init(catalogURL: URL, ftsAvailabilityOverride: Bool?) throws {
+  init(
+    catalogURL: URL,
+    ftsAvailabilityOverride: Bool?,
+    backupFaults: SQLiteCatalogBackupFaults = .none
+  ) throws {
     guard catalogURL.isFileURL else {
       throw CatalogStoreError.invalidRequest(
         operation: "catalog.open",
@@ -52,6 +97,7 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
     }
 
     self.catalogURL = catalogURL.standardizedFileURL
+    self.backupFaults = backupFaults
     let database = try Self.openDatabase(at: catalogURL)
     do {
       let version = try Self.readSchemaVersion(database)
@@ -226,29 +272,36 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
     }
     let limit = request.limit.map(Int64.init) ?? Int64.max
 
-    if ftsAvailable, query.allSatisfy({ $0.isLetter || $0.isNumber || $0.isWhitespace }) {
+    let pattern = "%\(escapeLike(query))%"
+    if ftsAvailable, query.allSatisfy({ $0.isLetter || $0.isNumber }) {
       return CatalogAssetSearchResult(
         assets: try assets(
           sql: """
             SELECT assets.id, assets.source_url, assets.filename, assets.type_identifier,
               assets.fingerprint_json, assets.import_ms, assets.capture_ms,
               assets.dimensions_json, assets.rating, assets.color_label, assets.is_missing
-            FROM asset_search
-            JOIN assets ON assets.id = asset_search.asset_id
-            WHERE asset_search MATCH ?
+            FROM assets
+            WHERE assets.id IN (
+                SELECT asset_id FROM asset_search WHERE asset_search MATCH ?
+              )
+              OR assets.filename LIKE ? ESCAPE '\\'
+              OR COALESCE(assets.type_identifier, '') LIKE ? ESCAPE '\\'
+              OR assets.source_url LIKE ? ESCAPE '\\'
             ORDER BY assets.import_ms DESC, assets.id ASC
             LIMIT ?;
             """,
           operation: "asset.search.fts",
           bindValues: { statement in
             try bind(query, to: statement, index: 1, operation: "asset.search.fts")
-            try bind(limit, to: statement, index: 2, operation: "asset.search.fts")
+            try bind(pattern, to: statement, index: 2, operation: "asset.search.fts")
+            try bind(pattern, to: statement, index: 3, operation: "asset.search.fts")
+            try bind(pattern, to: statement, index: 4, operation: "asset.search.fts")
+            try bind(limit, to: statement, index: 5, operation: "asset.search.fts")
           }
         )
       )
     }
 
-    let pattern = "%\(escapeLike(query))%"
     return CatalogAssetSearchResult(
       assets: try assets(
         sql: """
@@ -516,55 +569,66 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
       }
       throw primaryError
     }
-    do {
-      guard let backup = sqlite3_backup_init(destination, "main", database, "main") else {
-        throw Self.sqliteError(
-          operation: "catalog.backup.init", database: destination,
-          code: sqlite3_errcode(destination))
-      }
+    var failures: [CatalogStoreError] = []
+    if let backup = sqlite3_backup_init(destination, "main", database, "main") {
       let start = Date()
-      var stepCode: Int32 = SQLITE_OK
+      var actualStepCode: Int32 = SQLITE_OK
       repeat {
-        stepCode = sqlite3_backup_step(backup, -1)
-        if stepCode == SQLITE_BUSY || stepCode == SQLITE_LOCKED {
+        actualStepCode = sqlite3_backup_step(backup, -1)
+        if actualStepCode == SQLITE_BUSY || actualStepCode == SQLITE_LOCKED {
           _ = sqlite3_sleep(50)
         }
-      } while (stepCode == SQLITE_BUSY || stepCode == SQLITE_LOCKED)
+      } while (actualStepCode == SQLITE_BUSY || actualStepCode == SQLITE_LOCKED)
         && Date().timeIntervalSince(start) < 5
-      let finishCode = sqlite3_backup_finish(backup)
-      guard stepCode == SQLITE_DONE else {
-        throw Self.sqliteError(
-          operation: "catalog.backup.step", database: destination, code: stepCode)
+      let stepCode = backupFaults.stepCode ?? actualStepCode
+      if stepCode != SQLITE_DONE {
+        failures.append(
+          backupError(
+            operation: "catalog.backup.step", database: destination, code: stepCode,
+            isInjected: backupFaults.stepCode != nil))
       }
-      guard finishCode == SQLITE_OK else {
-        throw Self.sqliteError(
-          operation: "catalog.backup.finish", database: destination, code: finishCode)
+      let actualFinishCode = sqlite3_backup_finish(backup)
+      let finishCode = backupFaults.finishCode ?? actualFinishCode
+      if finishCode != SQLITE_OK {
+        failures.append(
+          backupError(
+            operation: "catalog.backup.finish", database: destination, code: finishCode,
+            isInjected: backupFaults.finishCode != nil))
       }
-      let closeCode = sqlite3_close_v2(destination)
-      guard closeCode == SQLITE_OK else {
-        throw Self.sqliteError(
-          operation: "catalog.backup.close", database: destination, code: closeCode)
-      }
-      return CatalogBackupResult(destinationURL: request.destinationURL)
-    } catch let primaryError {
-      let closeCode = sqlite3_close_v2(destination)
-      var cleanupErrors = backupCleanupErrors(for: request.destinationURL)
-      if closeCode != SQLITE_OK {
-        cleanupErrors.append(
-          Self.sqliteError(
-            operation: "catalog.backup.close", database: destination, code: closeCode
-          ).localizedDescription
-        )
-      }
-      guard cleanupErrors.isEmpty else {
-        throw CatalogStoreError.cleanup(
-          operation: "catalog.backup.close",
-          primaryError: String(describing: primaryError),
-          cleanupError: cleanupErrors.joined(separator: " | ")
-        )
-      }
-      throw primaryError
+    } else {
+      failures.append(
+        Self.sqliteError(
+          operation: "catalog.backup.init", database: destination,
+          code: sqlite3_errcode(destination)))
     }
+
+    let actualCloseCode = sqlite3_close_v2(destination)
+    let closeCode = backupFaults.closeCode ?? actualCloseCode
+    if closeCode != SQLITE_OK {
+      failures.append(
+        backupError(
+          operation: "catalog.backup.close",
+          database: actualCloseCode == SQLITE_OK ? nil : destination,
+          code: closeCode,
+          isInjected: backupFaults.closeCode != nil))
+    }
+
+    guard let primaryError = failures.first else {
+      return CatalogBackupResult(destinationURL: request.destinationURL)
+    }
+    var cleanupErrors = failures.dropFirst().map(\.localizedDescription)
+    cleanupErrors.append(
+      contentsOf: backupCleanupErrors(
+        for: request.destinationURL,
+        forcedMessage: backupFaults.filesystemCleanupMessage))
+    guard cleanupErrors.isEmpty else {
+      throw CatalogStoreError.cleanup(
+        operation: "catalog.backup",
+        primaryError: primaryError.localizedDescription,
+        cleanupError: cleanupErrors.joined(separator: " | ")
+      )
+    }
+    throw primaryError
   }
 
   public func enqueue(_ request: JobEnqueueRequest) async throws -> JobEnqueueResult {
@@ -796,7 +860,7 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
       result = try body(statement)
     } catch {
       let finalizeCode = sqlite3_finalize(statement)
-      if finalizeCode != SQLITE_OK {
+      if finalizeCode != SQLITE_OK && !Self.isRepeatedStatementError(finalizeCode, primary: error) {
         throw CatalogStoreError.cleanup(
           operation: "\(operation).finalize",
           primaryError: String(describing: error),
@@ -811,6 +875,13 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
       throw sqliteError(operation: "\(operation).finalize", code: finalizeCode)
     }
     return result
+  }
+
+  private static func isRepeatedStatementError(_ code: Int32, primary: Error) -> Bool {
+    guard case .sqlite(_, let primaryCode, _, _) = primary as? CatalogStoreError else {
+      return false
+    }
+    return code == primaryCode
   }
 
   private func execute(_ sql: String, operation: String) throws {
@@ -901,14 +972,22 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
     }
   }
 
-  private func backupCleanupErrors(for destinationURL: URL) -> [String] {
+  private func backupCleanupErrors(
+    for destinationURL: URL,
+    forcedMessage: String? = nil
+  ) -> [String] {
     let artifacts = [
       destinationURL,
       URL(fileURLWithPath: destinationURL.path + "-wal"),
       URL(fileURLWithPath: destinationURL.path + "-shm"),
     ]
+    var pendingForcedMessage = forcedMessage
     return artifacts.compactMap { artifact in
       guard FileManager.default.fileExists(atPath: artifact.path) else { return nil }
+      if let message = pendingForcedMessage {
+        pendingForcedMessage = nil
+        return "\(artifact.lastPathComponent): \(message)"
+      }
       do {
         try FileManager.default.removeItem(at: artifact)
         return nil
@@ -916,6 +995,23 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
         return "\(artifact.lastPathComponent): \(error.localizedDescription)"
       }
     }
+  }
+
+  private func backupError(
+    operation: String,
+    database: OpaquePointer?,
+    code: Int32,
+    isInjected: Bool
+  ) -> CatalogStoreError {
+    if isInjected {
+      return CatalogStoreError.sqlite(
+        operation: operation,
+        code: code,
+        extendedCode: code,
+        message: "A deterministic backup fault was injected."
+      )
+    }
+    return Self.sqliteError(operation: operation, database: database, code: code)
   }
 
   private func columnData(_ statement: OpaquePointer, column: Int32, operation: String) throws
@@ -1257,67 +1353,193 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
     _ database: OpaquePointer,
     shouldUseFTS: Bool
   ) throws -> Bool {
-    let requiredColumns: [String: Set<String>] = [
+    let requiredColumns: [String: [SQLiteSchemaColumn]] = [
       "assets": [
-        "id", "source_url", "filename", "type_identifier", "fingerprint_json", "import_ms",
-        "capture_ms", "dimensions_json", "rating", "color_label", "is_missing",
+        .init(
+          position: 0, name: "id", type: "TEXT", isNotNull: false, defaultValue: nil,
+          primaryKeyPosition: 1),
+        .init(
+          position: 1, name: "source_url", type: "TEXT", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
+        .init(
+          position: 2, name: "filename", type: "TEXT", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
+        .init(
+          position: 3, name: "type_identifier", type: "TEXT", isNotNull: false,
+          defaultValue: nil, primaryKeyPosition: 0),
+        .init(
+          position: 4, name: "fingerprint_json", type: "BLOB", isNotNull: true,
+          defaultValue: nil, primaryKeyPosition: 0),
+        .init(
+          position: 5, name: "import_ms", type: "INTEGER", isNotNull: true,
+          defaultValue: nil, primaryKeyPosition: 0),
+        .init(
+          position: 6, name: "capture_ms", type: "INTEGER", isNotNull: false,
+          defaultValue: nil, primaryKeyPosition: 0),
+        .init(
+          position: 7, name: "dimensions_json", type: "BLOB", isNotNull: false,
+          defaultValue: nil, primaryKeyPosition: 0),
+        .init(
+          position: 8, name: "rating", type: "INTEGER", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
+        .init(
+          position: 9, name: "color_label", type: "BLOB", isNotNull: false,
+          defaultValue: nil, primaryKeyPosition: 0),
+        .init(
+          position: 10, name: "is_missing", type: "INTEGER", isNotNull: true,
+          defaultValue: nil, primaryKeyPosition: 0),
       ],
-      "edit_recipes": ["asset_id", "revision", "date_ms", "recipe_json"],
-      "catalog_jobs": ["id", "created_ms", "updated_ms", "job_json"],
-      "asset_bookmarks": ["asset_id", "bookmark", "updated_ms"],
+      "edit_recipes": [
+        .init(
+          position: 0, name: "asset_id", type: "TEXT", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 1),
+        .init(
+          position: 1, name: "revision", type: "INTEGER", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 2),
+        .init(
+          position: 2, name: "date_ms", type: "INTEGER", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
+        .init(
+          position: 3, name: "recipe_json", type: "BLOB", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
+      ],
+      "catalog_jobs": [
+        .init(
+          position: 0, name: "id", type: "TEXT", isNotNull: false, defaultValue: nil,
+          primaryKeyPosition: 1),
+        .init(
+          position: 1, name: "created_ms", type: "INTEGER", isNotNull: true,
+          defaultValue: nil, primaryKeyPosition: 0),
+        .init(
+          position: 2, name: "updated_ms", type: "INTEGER", isNotNull: true,
+          defaultValue: nil, primaryKeyPosition: 0),
+        .init(
+          position: 3, name: "job_json", type: "BLOB", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
+      ],
+      "asset_bookmarks": [
+        .init(
+          position: 0, name: "asset_id", type: "TEXT", isNotNull: false, defaultValue: nil,
+          primaryKeyPosition: 1),
+        .init(
+          position: 1, name: "bookmark", type: "BLOB", isNotNull: true, defaultValue: nil,
+          primaryKeyPosition: 0),
+        .init(
+          position: 2, name: "updated_ms", type: "INTEGER", isNotNull: true,
+          defaultValue: nil, primaryKeyPosition: 0),
+      ],
     ]
     for (table, expected) in requiredColumns {
       guard try tableExists(database, name: table) else {
         throw schemaError("The required table '\(table)' is missing.")
       }
       let actual = try tableColumns(database, table: table)
-      guard expected.isSubset(of: actual) else {
-        throw schemaError("The table '\(table)' does not contain the required version-1 columns.")
+      guard expected == actual else {
+        throw schemaError("The table '\(table)' does not have the exact version-1 columns.")
       }
     }
-    try validateSchemaSQL(
-      database,
-      object: "assets",
-      type: "table",
-      requiredFragments: [
-        "id TEXT PRIMARY KEY", "source_url TEXT NOT NULL", "filename TEXT NOT NULL",
-        "fingerprint_json BLOB NOT NULL", "import_ms INTEGER NOT NULL",
-        "rating INTEGER NOT NULL CHECK (rating BETWEEN 0 AND 5)", "color_label BLOB",
-        "is_missing INTEGER NOT NULL CHECK (is_missing IN (0, 1))",
-      ]
-    )
-    try validateSchemaSQL(
-      database,
-      object: "edit_recipes",
-      type: "table",
-      requiredFragments: [
-        "asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE",
-        "PRIMARY KEY (asset_id, revision)",
-      ]
-    )
-    try validateSchemaSQL(
-      database,
-      object: "asset_bookmarks",
-      type: "table",
-      requiredFragments: [
-        "asset_id TEXT PRIMARY KEY REFERENCES assets(id) ON DELETE CASCADE",
-        "bookmark BLOB NOT NULL",
-      ]
-    )
-    for index in [
-      "assets_import_ms_index", "assets_capture_ms_index", "assets_filename_index",
-      "catalog_jobs_updated_ms_index",
-    ] {
-      guard try indexExists(database, name: index) else {
-        throw schemaError("The required index '\(index)' is missing.")
+    let expectedTableSQL = [
+      "assets": """
+      CREATE TABLE assets (
+        id TEXT PRIMARY KEY,
+        source_url TEXT NOT NULL,
+        filename TEXT NOT NULL,
+        type_identifier TEXT,
+        fingerprint_json BLOB NOT NULL,
+        import_ms INTEGER NOT NULL,
+        capture_ms INTEGER,
+        dimensions_json BLOB,
+        rating INTEGER NOT NULL CHECK (rating BETWEEN 0 AND 5),
+        color_label BLOB,
+        is_missing INTEGER NOT NULL CHECK (is_missing IN (0, 1))
+      )
+      """,
+      "edit_recipes": """
+      CREATE TABLE edit_recipes (
+        asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+        revision INTEGER NOT NULL,
+        date_ms INTEGER NOT NULL,
+        recipe_json BLOB NOT NULL,
+        PRIMARY KEY (asset_id, revision)
+      )
+      """,
+      "catalog_jobs": """
+      CREATE TABLE catalog_jobs (
+        id TEXT PRIMARY KEY,
+        created_ms INTEGER NOT NULL,
+        updated_ms INTEGER NOT NULL,
+        job_json BLOB NOT NULL
+      )
+      """,
+      "asset_bookmarks": """
+      CREATE TABLE asset_bookmarks (
+        asset_id TEXT PRIMARY KEY REFERENCES assets(id) ON DELETE CASCADE,
+        bookmark BLOB NOT NULL,
+        updated_ms INTEGER NOT NULL
+      )
+      """,
+    ]
+    for (table, expectedSQL) in expectedTableSQL {
+      try validateSchemaSQL(
+        database, object: table, type: "table", expectedSQL: expectedSQL)
+    }
+
+    let expectedIndexes: [String: (sql: String, columns: [SQLiteIndexColumn])] = [
+      "assets_import_ms_index": (
+        "CREATE INDEX assets_import_ms_index ON assets(import_ms)",
+        [
+          .init(
+            sequence: 0, tableColumn: 5, name: "import_ms", isDescending: false,
+            collation: "BINARY", isKey: true),
+          .init(
+            sequence: 1, tableColumn: -1, name: nil, isDescending: false,
+            collation: "BINARY", isKey: false),
+        ]
+      ),
+      "assets_capture_ms_index": (
+        "CREATE INDEX assets_capture_ms_index ON assets(capture_ms)",
+        [
+          .init(
+            sequence: 0, tableColumn: 6, name: "capture_ms", isDescending: false,
+            collation: "BINARY", isKey: true),
+          .init(
+            sequence: 1, tableColumn: -1, name: nil, isDescending: false,
+            collation: "BINARY", isKey: false),
+        ]
+      ),
+      "assets_filename_index": (
+        "CREATE INDEX assets_filename_index ON assets(filename COLLATE NOCASE)",
+        [
+          .init(
+            sequence: 0, tableColumn: 2, name: "filename", isDescending: false,
+            collation: "NOCASE", isKey: true),
+          .init(
+            sequence: 1, tableColumn: -1, name: nil, isDescending: false,
+            collation: "BINARY", isKey: false),
+        ]
+      ),
+      "catalog_jobs_updated_ms_index": (
+        "CREATE INDEX catalog_jobs_updated_ms_index ON catalog_jobs(updated_ms, created_ms)",
+        [
+          .init(
+            sequence: 0, tableColumn: 2, name: "updated_ms", isDescending: false,
+            collation: "BINARY", isKey: true),
+          .init(
+            sequence: 1, tableColumn: 1, name: "created_ms", isDescending: false,
+            collation: "BINARY", isKey: true),
+          .init(
+            sequence: 2, tableColumn: -1, name: nil, isDescending: false,
+            collation: "BINARY", isKey: false),
+        ]
+      ),
+    ]
+    for (index, expected) in expectedIndexes {
+      try validateSchemaSQL(
+        database, object: index, type: "index", expectedSQL: expected.sql)
+      guard try indexColumns(database, index: index) == expected.columns else {
+        throw schemaError("The index '\(index)' does not have the exact version-1 definition.")
       }
     }
-    try validateSchemaSQL(
-      database, object: "assets_filename_index", type: "index",
-      requiredFragments: ["ON assets(filename COLLATE NOCASE)"])
-    try validateSchemaSQL(
-      database, object: "catalog_jobs_updated_ms_index", type: "index",
-      requiredFragments: ["ON catalog_jobs(updated_ms, created_ms)"])
     try validateForeignKey(
       database, table: "edit_recipes", column: "asset_id", referencedTable: "assets")
     try validateForeignKey(
@@ -1326,6 +1548,15 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
     let ftsAvailable: Bool
     if shouldUseFTS {
       ftsAvailable = try tableExists(database, name: "asset_search")
+      if ftsAvailable {
+        try validateSchemaSQL(
+          database,
+          object: "asset_search",
+          type: "table",
+          expectedSQL:
+            "CREATE VIRTUAL TABLE asset_search USING fts5(asset_id UNINDEXED, filename, type_identifier, source_url)"
+        )
+      }
     } else {
       ftsAvailable = false
     }
@@ -1346,22 +1577,32 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
     return ftsAvailable
   }
 
-  private static func indexExists(_ database: OpaquePointer, name: String) throws -> Bool {
+  private static func indexColumns(_ database: OpaquePointer, index: String) throws
+    -> [SQLiteIndexColumn]
+  {
     try withStaticStatement(
       database,
-      sql: "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ? LIMIT 1;",
-      operation: "catalog.validate.index"
+      sql: "PRAGMA index_xinfo(\(index));",
+      operation: "catalog.validate.indexColumns"
     ) { statement in
-      let bindCode = sqlite3_bind_text(statement, 1, name, -1, sqliteTransient)
-      guard bindCode == SQLITE_OK else {
-        throw sqliteError(
-          operation: "catalog.validate.index.bind", database: database, code: bindCode)
+      var columns: [SQLiteIndexColumn] = []
+      while true {
+        let stepCode = sqlite3_step(statement)
+        if stepCode == SQLITE_DONE { return columns }
+        guard stepCode == SQLITE_ROW else {
+          throw sqliteError(
+            operation: "catalog.validate.indexColumns.step", database: database, code: stepCode)
+        }
+        columns.append(
+          SQLiteIndexColumn(
+            sequence: sqlite3_column_int(statement, 0),
+            tableColumn: sqlite3_column_int(statement, 1),
+            name: sqlite3_column_text(statement, 2).map { String(cString: $0) },
+            isDescending: sqlite3_column_int(statement, 3) != 0,
+            collation: sqlite3_column_text(statement, 4).map { String(cString: $0) },
+            isKey: sqlite3_column_int(statement, 5) != 0
+          ))
       }
-      let stepCode = sqlite3_step(statement)
-      if stepCode == SQLITE_ROW { return true }
-      if stepCode == SQLITE_DONE { return false }
-      throw sqliteError(
-        operation: "catalog.validate.index.step", database: database, code: stepCode)
     }
   }
 
@@ -1369,7 +1610,7 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
     _ database: OpaquePointer,
     object: String,
     type: String,
-    requiredFragments: [String]
+    expectedSQL: String
   ) throws {
     let sql: String = try withStaticStatement(
       database,
@@ -1389,17 +1630,20 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
       }
       return String(cString: value)
     }
-    let compact = sql.replacingOccurrences(of: "\n", with: " ")
-    for fragment in requiredFragments where !compact.localizedCaseInsensitiveContains(fragment) {
+    let normalized = sql.lowercased().filter { !$0.isWhitespace }
+    let expectedNormalized = expectedSQL.lowercased().filter { !$0.isWhitespace }
+    guard normalized == expectedNormalized else {
       throw schemaError("The SQL definition for '\(object)' is not version-1 compatible.")
     }
   }
 
-  private static func tableColumns(_ database: OpaquePointer, table: String) throws -> Set<String> {
+  private static func tableColumns(_ database: OpaquePointer, table: String) throws
+    -> [SQLiteSchemaColumn]
+  {
     try withStaticStatement(
       database, sql: "PRAGMA table_info(\(table));", operation: "catalog.validate.columns"
     ) { statement in
-      var columns: Set<String> = []
+      var columns: [SQLiteSchemaColumn] = []
       while true {
         let stepCode = sqlite3_step(statement)
         if stepCode == SQLITE_DONE { return columns }
@@ -1407,10 +1651,20 @@ public actor SQLiteCatalogStore: CatalogStore, JobEngine {
           throw sqliteError(
             operation: "catalog.validate.columns.step", database: database, code: stepCode)
         }
-        guard let name = sqlite3_column_text(statement, 1) else {
-          throw schemaError("A schema column name is NULL.")
+        guard let name = sqlite3_column_text(statement, 1),
+          let type = sqlite3_column_text(statement, 2)
+        else {
+          throw schemaError("A schema column name or type is NULL.")
         }
-        columns.insert(String(cString: name))
+        columns.append(
+          SQLiteSchemaColumn(
+            position: sqlite3_column_int(statement, 0),
+            name: String(cString: name),
+            type: String(cString: type).uppercased(),
+            isNotNull: sqlite3_column_int(statement, 3) != 0,
+            defaultValue: sqlite3_column_text(statement, 4).map { String(cString: $0) },
+            primaryKeyPosition: sqlite3_column_int(statement, 5)
+          ))
       }
     }
   }

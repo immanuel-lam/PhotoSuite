@@ -91,6 +91,24 @@ final class CatalogCoreTests: XCTestCase {
     XCTAssertEqual(blankResults, [])
   }
 
+  func testForcedFTSAndFallbackSearchHaveEquivalentSubstringResults() async throws {
+    let ftsStore = try SQLiteCatalogStore(
+      catalogURL: try makeCatalogURL(), ftsAvailabilityOverride: true)
+    let fallbackStore = try SQLiteCatalogStore(
+      catalogURL: try makeCatalogURL(), ftsAvailabilityOverride: false)
+    let midnight = try makeAsset(filename: "midnight-landscape.CR3", importDate: 20)
+    let night = try makeAsset(filename: "night-portrait.CR3", importDate: 10)
+    for asset in [midnight, night] {
+      _ = try await ftsStore.upsertAsset(.init(asset: asset))
+      _ = try await fallbackStore.upsertAsset(.init(asset: asset))
+    }
+
+    let ftsIDs = try await ftsStore.searchAssets(.init(query: "night")).assets.map(\.id)
+    let fallbackIDs = try await fallbackStore.searchAssets(.init(query: "night")).assets.map(\.id)
+    XCTAssertEqual(ftsIDs, [midnight.id, night.id])
+    XCTAssertEqual(ftsIDs, fallbackIDs)
+  }
+
   func testSearchMatchesFilenameTypeAndSourceURLWithQuotesAndBackslashes() async throws {
     let store = try SQLiteCatalogStore(
       catalogURL: try makeCatalogURL(), ftsAvailabilityOverride: false)
@@ -387,6 +405,159 @@ final class CatalogCoreTests: XCTestCase {
     XCTAssertThrowsError(try SQLiteCatalogStore(catalogURL: invalidV1URL))
   }
 
+  func testVersionOneSchemaRejectsWrongColumnTypeNullabilityAndPrimaryKey() throws {
+    let cases = [
+      (
+        "type",
+        versionOneSchema.replacingOccurrences(
+          of: "type_identifier TEXT,", with: "type_identifier BLOB,")
+      ),
+      (
+        "nullability",
+        versionOneSchema.replacingOccurrences(
+          of: "capture_ms INTEGER,", with: "capture_ms INTEGER NOT NULL,")
+      ),
+      (
+        "primary key",
+        versionOneSchema.replacingOccurrences(
+          of: "CREATE TABLE catalog_jobs (\n  id TEXT PRIMARY KEY,",
+          with: "CREATE TABLE catalog_jobs (\n  id TEXT UNIQUE,")
+      ),
+      (
+        "default",
+        versionOneSchema.replacingOccurrences(
+          of: "bookmark BLOB NOT NULL,\n  updated_ms INTEGER NOT NULL",
+          with: "bookmark BLOB NOT NULL,\n  updated_ms INTEGER NOT NULL DEFAULT 0")
+      ),
+    ]
+
+    for (name, schema) in cases {
+      try assertVersionOneSchemaRejected(schema, name: name, ftsAvailabilityOverride: false)
+    }
+  }
+
+  func testVersionOneSchemaRejectsWrongCheckAndCompositePrimaryKey() throws {
+    let cases = [
+      (
+        "check",
+        versionOneSchema.replacingOccurrences(
+          of: "CHECK (rating BETWEEN 0 AND 5)", with: "CHECK (rating BETWEEN 0 AND 6)")
+      ),
+      (
+        "composite primary key",
+        versionOneSchema.replacingOccurrences(
+          of: "PRIMARY KEY (asset_id, revision)", with: "PRIMARY KEY (revision, asset_id)")
+      ),
+    ]
+
+    for (name, schema) in cases {
+      try assertVersionOneSchemaRejected(schema, name: name, ftsAvailabilityOverride: false)
+    }
+  }
+
+  func testVersionOneSchemaRejectsWrongIndexDefinition() throws {
+    let schema = versionOneSchema.replacingOccurrences(
+      of: "CREATE INDEX assets_import_ms_index ON assets(import_ms);",
+      with: "CREATE INDEX assets_import_ms_index ON assets(import_ms DESC);")
+    try assertVersionOneSchemaRejected(
+      schema, name: "descending import index", ftsAvailabilityOverride: false)
+  }
+
+  func testVersionOneSchemaRejectsNonFTS5SearchTable() throws {
+    let schema =
+      versionOneSchema + """
+
+        CREATE TABLE asset_search (
+          asset_id TEXT,
+          filename TEXT,
+          type_identifier TEXT,
+          source_url TEXT
+        );
+        """
+    try assertVersionOneSchemaRejected(
+      schema, name: "ordinary search table", ftsAvailabilityOverride: true)
+  }
+
+  func testReadOnlyCatalogAndDuplicateJobConstraintReturnTypedSQLiteErrors() async throws {
+    let catalogURL = try makeCatalogURL()
+    var writableStore: SQLiteCatalogStore? = try SQLiteCatalogStore(catalogURL: catalogURL)
+    try await writableStore!.close()
+    writableStore = nil
+    let catalogDirectory = catalogURL.deletingLastPathComponent()
+    for fileURL in try FileManager.default.contentsOfDirectory(
+      at: catalogDirectory, includingPropertiesForKeys: nil)
+    {
+      try FileManager.default.setAttributes(
+        [.posixPermissions: 0o444], ofItemAtPath: fileURL.path)
+    }
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o555], ofItemAtPath: catalogDirectory.path)
+    addTeardownBlock {
+      try? FileManager.default.setAttributes(
+        [.posixPermissions: 0o700], ofItemAtPath: catalogDirectory.path)
+      for fileURL
+        in (try? FileManager.default.contentsOfDirectory(
+          at: catalogDirectory, includingPropertiesForKeys: nil)) ?? []
+      {
+        try? FileManager.default.setAttributes(
+          [.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+      }
+    }
+    let readOnlyStore = try SQLiteCatalogStore(catalogURL: catalogURL)
+    do {
+      _ = try await readOnlyStore.upsertAsset(.init(asset: makeAsset(filename: "read-only.jpg")))
+      XCTFail("Expected a write to the read-only catalog to fail.")
+    } catch let error as CatalogStoreError {
+      guard case .sqlite = error else {
+        return XCTFail("Expected a typed SQLite error, got \(error).")
+      }
+    }
+
+    let duplicateStore = try SQLiteCatalogStore(catalogURL: try makeCatalogURL())
+    let job = makeJob(state: .queued, updatedAt: 1)
+    _ = try await duplicateStore.enqueue(.init(job: job))
+    do {
+      _ = try await duplicateStore.enqueue(.init(job: job))
+      XCTFail("Expected a duplicate constraint failure.")
+    } catch let error as CatalogStoreError {
+      guard case .sqlite(let operation, let code, _, _) = error else {
+        return XCTFail("Expected a typed SQLite error, got \(error).")
+      }
+      XCTAssertEqual(operation, "job.enqueue.step")
+      XCTAssertEqual(code, SQLITE_CONSTRAINT)
+    }
+  }
+
+  func testBackupFusesStepFinishCloseAndFilesystemCleanupFailures() async throws {
+    let catalogURL = try makeCatalogURL()
+    let destinationURL = catalogURL.deletingLastPathComponent().appendingPathComponent(
+      "failed-backup.sqlite")
+    let store = try SQLiteCatalogStore(
+      catalogURL: catalogURL,
+      ftsAvailabilityOverride: nil,
+      backupFaults: SQLiteCatalogBackupFaults(
+        stepCode: SQLITE_IOERR,
+        finishCode: SQLITE_BUSY,
+        closeCode: SQLITE_BUSY,
+        filesystemCleanupMessage: "forced filesystem cleanup failure"
+      )
+    )
+
+    do {
+      _ = try await store.backup(.init(destinationURL: destinationURL))
+      XCTFail("Expected the injected backup failures.")
+    } catch let error as CatalogStoreError {
+      guard case .cleanup(let operation, let primaryError, let cleanupError) = error else {
+        return XCTFail("Expected a fused cleanup error, got \(error).")
+      }
+      XCTAssertEqual(operation, "catalog.backup")
+      XCTAssertTrue(primaryError.contains("catalog.backup.step"))
+      XCTAssertTrue(cleanupError.contains("catalog.backup.finish"))
+      XCTAssertTrue(cleanupError.contains("catalog.backup.close"))
+      XCTAssertTrue(cleanupError.contains("forced filesystem cleanup failure"))
+    }
+  }
+
   func testNormalizedAssetRowsRejectMalformedData() async throws {
     let catalogURL = try makeCatalogURL()
     let store = try SQLiteCatalogStore(catalogURL: catalogURL)
@@ -502,6 +673,71 @@ final class CatalogCoreTests: XCTestCase {
 
   private func makeCatalogURL() throws -> URL {
     try makeTemporaryDirectory().appendingPathComponent("catalog.sqlite")
+  }
+
+  private func assertVersionOneSchemaRejected(
+    _ schema: String,
+    name: String,
+    ftsAvailabilityOverride: Bool
+  ) throws {
+    let catalogURL = try makeCatalogURL()
+    let database = try openWritableDatabase(catalogURL)
+    do {
+      try execute(database, schema + "\nPRAGMA user_version=1;")
+      XCTAssertEqual(sqlite3_close_v2(database), SQLITE_OK)
+    } catch {
+      _ = sqlite3_close_v2(database)
+      throw error
+    }
+    XCTAssertThrowsError(
+      try SQLiteCatalogStore(
+        catalogURL: catalogURL, ftsAvailabilityOverride: ftsAvailabilityOverride),
+      "Expected rejection for malformed schema case: \(name)"
+    ) { error in
+      guard case .unsupported = error as? CatalogStoreError else {
+        return XCTFail("Expected an unsupported schema error for \(name), got \(error).")
+      }
+    }
+  }
+
+  private var versionOneSchema: String {
+    """
+    CREATE TABLE assets (
+      id TEXT PRIMARY KEY,
+      source_url TEXT NOT NULL,
+      filename TEXT NOT NULL,
+      type_identifier TEXT,
+      fingerprint_json BLOB NOT NULL,
+      import_ms INTEGER NOT NULL,
+      capture_ms INTEGER,
+      dimensions_json BLOB,
+      rating INTEGER NOT NULL CHECK (rating BETWEEN 0 AND 5),
+      color_label BLOB,
+      is_missing INTEGER NOT NULL CHECK (is_missing IN (0, 1))
+    );
+    CREATE INDEX assets_import_ms_index ON assets(import_ms);
+    CREATE INDEX assets_capture_ms_index ON assets(capture_ms);
+    CREATE INDEX assets_filename_index ON assets(filename COLLATE NOCASE);
+    CREATE TABLE edit_recipes (
+      asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+      revision INTEGER NOT NULL,
+      date_ms INTEGER NOT NULL,
+      recipe_json BLOB NOT NULL,
+      PRIMARY KEY (asset_id, revision)
+    );
+    CREATE TABLE catalog_jobs (
+      id TEXT PRIMARY KEY,
+      created_ms INTEGER NOT NULL,
+      updated_ms INTEGER NOT NULL,
+      job_json BLOB NOT NULL
+    );
+    CREATE INDEX catalog_jobs_updated_ms_index ON catalog_jobs(updated_ms, created_ms);
+    CREATE TABLE asset_bookmarks (
+      asset_id TEXT PRIMARY KEY REFERENCES assets(id) ON DELETE CASCADE,
+      bookmark BLOB NOT NULL,
+      updated_ms INTEGER NOT NULL
+    );
+    """
   }
 
   private func makeTemporaryDirectory() throws -> URL {
