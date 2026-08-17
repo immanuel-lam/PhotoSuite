@@ -1,0 +1,19 @@
+PhotoSuite Notices
+=================
+
+PhotoSuite source files are licensed under the Mozilla Public License,
+version 2.0 (SPDX: MPL-2.0). The complete license text is in LICENSE.
+
+Copyright notices stay in their source files. This repository has no
+third-party source or binary dependencies at this revision. Therefore, no
+third-party attribution notice is required yet.
+
+When a dependency, icon, font, sample, model, or other redistributed
+material is added, its copyright and license notices must be recorded in
+this file and in the release SBOM. See docs/DEPENDENCY_POLICY.md and
+docs/REPRODUCIBLE_BUILDS_AND_SBOM.md.
+
+"Adobe" and "Lightroom" are trademarks or registered trademarks of Adobe
+in the United States and other countries. They identify a comparison
+target only. PhotoSuite is independent software and is not affiliated
+with, endorsed by, or supported by Adobe.
