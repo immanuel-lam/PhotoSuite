@@ -458,14 +458,16 @@ public actor AppleRawDecoder: RawDecoder {
   }
 
   private func isRealRAWFilter(_ raw: any AppleRAWFilterAccess) -> Bool {
-    !raw.decoderVersion.isEmpty
-      && !isNoRAWDecoderVersion(raw.decoderVersion)
-      && raw.supportedDecoderVersions.contains { version in
-        !version.isEmpty && !isNoRAWDecoderVersion(version)
+    let decoderVersion = raw.decoderVersion
+    let supportedDecoderVersions = raw.supportedDecoderVersions
+    return !decoderVersion.isEmpty
+      && !Self.isNoRAWDecoderVersion(decoderVersion)
+      && supportedDecoderVersions.contains { version in
+        !version.isEmpty && !Self.isNoRAWDecoderVersion(version)
       }
   }
 
-  private func isNoRAWDecoderVersion(_ version: String) -> Bool {
+  private nonisolated static func isNoRAWDecoderVersion(_ version: String) -> Bool {
     version.caseInsensitiveCompare("None") == .orderedSame
   }
 
