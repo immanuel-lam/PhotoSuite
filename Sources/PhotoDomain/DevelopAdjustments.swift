@@ -138,24 +138,33 @@ public struct OpticsAdjustmentV1: Codable, Hashable, Sendable {
   public let chromaticAberration: Double
   /// A bounded colour-fringe suppression amount.
   public let defringe: Double
+  /// The optional attribution-aware lens profile that supplied these values.
+  ///
+  /// The render graph consumes the normalized correction values above. This
+  /// identifier keeps the selected profile durable without coupling the recipe
+  /// to a particular lens database installation.
+  public let lensProfileID: String?
 
   public init?(
     vignetteCorrection: Double,
     lensDistortion: Double = 0,
     chromaticAberration: Double = 0,
-    defringe: Double = 0
+    defringe: Double = 0,
+    lensProfileID: String? = nil
   ) {
     guard
       DevelopAdjustmentValidation.isUnit(vignetteCorrection),
       DevelopAdjustmentValidation.isNormalized(lensDistortion),
       DevelopAdjustmentValidation.isUnit(chromaticAberration),
-      DevelopAdjustmentValidation.isUnit(defringe)
+      DevelopAdjustmentValidation.isUnit(defringe),
+      DevelopAdjustmentValidation.isValidOptionalIdentifier(lensProfileID)
     else { return nil }
     schemaVersion = 1
     self.vignetteCorrection = vignetteCorrection
     self.lensDistortion = lensDistortion
     self.chromaticAberration = chromaticAberration
     self.defringe = defringe
+    self.lensProfileID = lensProfileID?.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
   public init(from decoder: any Decoder) throws {
@@ -166,7 +175,8 @@ public struct OpticsAdjustmentV1: Codable, Hashable, Sendable {
         vignetteCorrection: values.vignetteCorrection,
         lensDistortion: values.lensDistortion ?? 0,
         chromaticAberration: values.chromaticAberration ?? 0,
-        defringe: values.defringe ?? 0
+        defringe: values.defringe ?? 0,
+        lensProfileID: values.lensProfileID
       )
     else { throw DevelopAdjustmentValidation.corrupt(decoder, "Invalid optics adjustment") }
     self = validated
@@ -183,6 +193,7 @@ public struct OpticsAdjustmentV1: Codable, Hashable, Sendable {
       try container.encode(chromaticAberration, forKey: .chromaticAberration)
     }
     if defringe != 0 { try container.encode(defringe, forKey: .defringe) }
+    if let lensProfileID { try container.encode(lensProfileID, forKey: .lensProfileID) }
   }
 
   private enum CodingKeys: String, CodingKey {
@@ -191,6 +202,7 @@ public struct OpticsAdjustmentV1: Codable, Hashable, Sendable {
     case lensDistortion
     case chromaticAberration
     case defringe
+    case lensProfileID
   }
 }
 
@@ -348,6 +360,12 @@ private enum DevelopAdjustmentValidation {
     value.isFinite && (-1...1).contains(value)
   }
 
+  static func isValidOptionalIdentifier(_ value: String?) -> Bool {
+    guard let value else { return true }
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    return !trimmed.isEmpty && trimmed.count <= 256
+  }
+
   static func corrupt(_ decoder: any Decoder, _ description: String) -> DecodingError {
     .dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: description))
   }
@@ -387,6 +405,7 @@ private struct PersistedOptics: Decodable {
   let lensDistortion: Double?
   let chromaticAberration: Double?
   let defringe: Double?
+  let lensProfileID: String?
 }
 
 private struct PersistedEffects: Decodable {

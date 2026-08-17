@@ -2568,7 +2568,12 @@ public final class PhotoWorkspace {
         && !adjustment.flipVertical
     case .detail(let adjustment):
       adjustment.sharpening == 0 && adjustment.luminanceNoiseReduction == 0
-    case .optics(let adjustment): adjustment.vignetteCorrection == 0
+    case .optics(let adjustment):
+      adjustment.vignetteCorrection == 0
+        && adjustment.lensDistortion == 0
+        && adjustment.chromaticAberration == 0
+        && adjustment.defringe == 0
+        && adjustment.lensProfileID == nil
     case .effects(let adjustment): adjustment.vignetteAmount == 0
     case .calibration(let adjustment):
       adjustment.redGain == 0 && adjustment.greenGain == 0 && adjustment.blueGain == 0

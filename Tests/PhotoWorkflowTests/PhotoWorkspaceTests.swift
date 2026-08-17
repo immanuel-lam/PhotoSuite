@@ -491,6 +491,40 @@ final class PhotoWorkspaceTests: XCTestCase {
     XCTAssertEqual(futureWorkspace.lastError, .unknownOperationsBlockEditing)
   }
 
+  func testZeroValuedLensProfileIsDurableInsteadOfNeutral() async throws {
+    let asset = makeAsset(name: "zero-lens-profile.jpg")
+    let catalog = CatalogSpy(
+      assets: [asset],
+      recipes: [asset.id: makeRecipe(assetID: asset.id)]
+    )
+    let workspace = makeWorkspace(catalog: catalog)
+    let profile = try XCTUnwrap(
+      LensProfileV1(
+        identifier: "fixture:neutral",
+        maker: "Fixture",
+        model: "Neutral",
+        mount: nil,
+        distortion: 0,
+        vignetting: 0,
+        chromaticAberration: 0,
+        defringe: 0,
+        attribution: .photosuite
+      )
+    )
+    let optics = try XCTUnwrap(profile.opticsAdjustment())
+
+    await workspace.reopen()
+    await workspace.commitDevelopOperation(.optics(optics))
+
+    XCTAssertEqual(workspace.currentRecipe?.revision, 1)
+    XCTAssertEqual(workspace.currentRecipe?.operations, [.optics(optics)])
+
+    let reopened = makeWorkspace(catalog: catalog)
+    await reopened.reopen()
+    XCTAssertEqual(reopened.currentRecipe?.revision, 1)
+    XCTAssertEqual(reopened.currentRecipe?.operations, [.optics(optics)])
+  }
+
   func testRetouchDevelopOperationsCommitInCanonicalOrderAndSurviveReopen() async throws {
     let asset = makeAsset(name: "retouch-families.jpg")
     let initial = makeRecipe(assetID: asset.id)

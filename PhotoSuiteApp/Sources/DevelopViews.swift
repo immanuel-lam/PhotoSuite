@@ -176,6 +176,9 @@ struct DevelopInspector: View {
         BaselineDevelopControls(workspace: workspace)
 
         Divider()
+        LensProfileInspector(workspace: workspace)
+
+        Divider()
         RetouchInspector(workspace: workspace)
 
         Divider()

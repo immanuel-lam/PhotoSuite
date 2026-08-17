@@ -229,6 +229,47 @@ final class DevelopRenderTests: XCTestCase {
     XCTAssertEqual(try pixels(grained), try pixels(grainedAgain))
   }
 
+  func testLensProfileMapsToTheSameDeterministicRenderAsItsOpticsOperation() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let attribution = try XCTUnwrap(
+      LensProfileAttributionV1(
+        source: "Fixture",
+        license: "MPL-2.0",
+        notice: "PhotoSuite fixture"
+      )
+    )
+    let profile = try XCTUnwrap(
+      LensProfileV1(
+        identifier: "fixture:profile",
+        maker: "Fixture",
+        model: "Measured Lens",
+        mount: nil,
+        distortion: -0.7,
+        vignetting: 0.35,
+        chromaticAberration: 0.4,
+        defringe: 0.25,
+        attribution: attribution
+      )
+    )
+    let profileOperation = EditOperation.optics(try XCTUnwrap(profile.opticsAdjustment()))
+    let directOperation = EditOperation.optics(
+      try XCTUnwrap(
+        OpticsAdjustmentV1(
+          vignetteCorrection: profile.vignetting,
+          lensDistortion: profile.distortion,
+          chromaticAberration: profile.chromaticAberration,
+          defringe: profile.defringe,
+          lensProfileID: profile.identifier
+        )
+      )
+    )
+
+    let profileImage = try await render(fixture.source, operations: [profileOperation])
+    let directImage = try await render(fixture.source, operations: [directOperation])
+    XCTAssertEqual(try pixels(profileImage), try pixels(directImage))
+  }
+
   func testHDRIntentIsRecognizedAndPreservesCurrentExtendedRangeGraphPixels() async throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
