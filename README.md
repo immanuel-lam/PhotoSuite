@@ -56,9 +56,10 @@ by migration and reopen tests. Session collections remain temporary.
 The baseline controls and mask contracts are pre-alpha workflow evidence;
 they are not a Lightroom-equivalent implementation.
 
-Mask data, authoring, duplicate/synchronise requests, stale-result validation,
-deterministic rasterisation, graph composition, masked exposure, and masked
-colour grading exist. Bounded deterministic clone, healing, and manual red-eye
+Mask data, native authoring controls, duplicate/synchronise requests,
+stale-result validation, deterministic rasterisation, graph composition,
+masked exposure, and masked colour grading exist. Bounded deterministic clone,
+healing, and manual red-eye
 recipes are also available in the render core, but they are not texture-aware
 or automatically detected Lightroom equivalents. Apple Vision foreground,
 subject, and person selection is available offline; sky, object, background,
