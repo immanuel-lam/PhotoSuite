@@ -128,6 +128,9 @@ within the community.
 This Code of Conduct is adapted from the Contributor Covenant, version
 2.1, available at
 https://www.contributor-covenant.org/version/2/1/code_of_conduct.html.
+Community Impact Guidelines were inspired by Mozilla’s code of conduct
+enforcement ladder.
+https://github.com/mozilla/diversity.
 This adapted material is licensed under the Creative Commons Attribution
 4.0 International license (SPDX: CC-BY-4.0). The complete license text
 is in LICENSES/CC-BY-4.0.txt.
