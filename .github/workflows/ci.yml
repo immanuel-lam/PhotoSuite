@@ -34,10 +34,17 @@ jobs:
       - name: Test CI verification script
         run: scripts/ci/test-verify.sh
 
-      - name: Install pinned XcodeGen
+      - name: Test SBOM generation script
+        run: scripts/ci/test-generate-sbom.sh
+
+      - name: Install pinned build and SBOM tools
         run: |
           scripts/ci/install-xcodegen.sh "$RUNNER_TEMP/bin"
+          scripts/ci/install-syft.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
       - name: Test and build
         run: scripts/ci/verify.sh
+
+      - name: Generate and validate SBOM
+        run: scripts/ci/generate-sbom.sh artifacts/sbom

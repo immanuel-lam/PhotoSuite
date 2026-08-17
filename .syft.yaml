@@ -1,15 +1,15 @@
-# SBOM output configuration for release CI. Pin and record the Syft version
-# in the release metadata before use. CI must create artifacts/sbom first.
-output:
-  - "cyclonedx-json=artifacts/sbom/PhotoSuite.cdx.json"
-  - "spdx-json=artifacts/sbom/PhotoSuite.spdx.json"
+# SBOM scan configuration for release CI. The generation script supplies
+# explicit CycloneDX and SPDX output paths and records their SHA-256 hashes.
 check-for-app-update: false
 format:
   pretty: true
 file:
   metadata:
-    selection: "owned-by-package"
+    selection: "none"
     digests:
       - "sha256"
 exclude:
+  - "./.build/**"
+  - "./.git/**"
+  - "./.swiftpm/**"
   - "./artifacts/**"

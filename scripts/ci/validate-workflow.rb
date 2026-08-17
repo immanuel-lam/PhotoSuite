@@ -35,6 +35,9 @@ require_contract(checkout.dig("with", "persist-credentials") == false, "checkout
 run_commands = steps.map { |step| step["run"] }.compact.join("\n")
 [
   "scripts/ci/install-xcodegen.sh",
+  "scripts/ci/install-syft.sh",
+  "scripts/ci/test-generate-sbom.sh",
+  "scripts/ci/generate-sbom.sh",
   "scripts/ci/verify.sh",
 ].each do |required_command|
   require_contract(run_commands.include?(required_command), "#{required_command} is not executed")

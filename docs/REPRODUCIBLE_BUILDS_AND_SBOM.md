@@ -2,13 +2,19 @@
 
 ## Status
 
-The public pre-alpha CI is configured to build an unsigned debug application
-and test the native catalog and render cores. No public CI run exists yet. The
-workflow does not compare independent release builds, generate an SBOM, sign,
-or notarize. Therefore, PhotoSuite does not claim that builds are reproducible
-and does not publish an SBOM artifact.
-No independent clean-build comparison has been recorded. This document
-defines the additional process required before the first release candidate.
+The public pre-alpha CI builds an unsigned debug application and tests the
+native catalog and render cores. A successful public CI run exists for commit
+[`126ee851bf9370837c1f783afa1e8daa65dfa27b`](https://github.com/immanuel-lam/PhotoSuite/actions/runs/32036892454)
+on 17 August 2026. It proves that the earlier CI configuration completed on a
+macOS 15 Arm64 runner. It does not prove release reproducibility, signing, or
+notarization.
+
+CI now also validates the checked-in SBOM generator contract and runs a pinned
+Syft generator. It creates CycloneDX JSON, SPDX JSON, and `SHA256SUMS` in the
+job workspace, but does not upload or publish them. No public CI result has yet
+recorded this SBOM step. No independent clean-build comparison has been
+recorded. Therefore, PhotoSuite does not claim that builds are reproducible and
+does not publish an SBOM artifact.
 
 ## Reproducible-build objective
 
@@ -39,8 +45,8 @@ have been resolved or documented.
 
 ## Required release procedure
 
-The current scaffold provides build commands, but a release job must
-perform the following steps before a release claim:
+The current CI is verification only. A separate release job must perform the
+following steps before a release claim:
 
 1. Check out the signed release commit and verify a clean worktree.
 2. Verify pinned dependency checksums and generate the project without
@@ -52,8 +58,8 @@ perform the following steps before a release claim:
 6. Generate CycloneDX JSON and SPDX JSON SBOMs from the release inputs.
 7. Validate both SBOMs, compare their component list to the resolver
    state, and scan the source and artifacts for known vulnerabilities.
-8. Update NOTICE, attach hashes and SBOMs to the release evidence, then
-   sign and notarize as a separate, documented phase.
+8. Update NOTICE, attach hashes and SBOMs to the release evidence.
+9. Sign and notarize in a separate, documented phase.
 
 ## SBOM format and minimum fields
 
@@ -69,11 +75,11 @@ and source copied into the distribution. It must not claim that an
 Apple system framework is redistributed when it is only linked from the
 user's installed macOS.
 
-## Proposed generation configuration
+## Checked-in generation and validation
 
-The checked-in `.syft.yaml` configuration selects these stable output
-files. A future release job must create `artifacts/sbom/` and populate
-them from the release commit:
+`scripts/ci/install-syft.sh` installs Syft 1.50.0 for Darwin arm64 after it
+checks the release archive SHA-256. `scripts/ci/generate-sbom.sh` then creates
+these files from the repository directory:
 
 ```text
 artifacts/sbom/PhotoSuite.cdx.json
@@ -81,22 +87,49 @@ artifacts/sbom/PhotoSuite.spdx.json
 artifacts/sbom/SHA256SUMS
 ```
 
-The CI configuration must use a pinned SBOM generator release and save
-its version in the release metadata. It must execute the following after
-all resolver state is present:
+The generator requires a new output directory. It rejects stale output, checks
+that both files are non-empty JSON with the expected top-level CycloneDX and
+SPDX values, then creates `SHA256SUMS` in fixed filename order. It runs Syft
+without update checks. It sets the source name to `PhotoSuite` and the source
+version to the checked-out Git commit. It rejects output that contains the
+local repository path. The reproducible invocation is:
 
 ```sh
-mkdir -p artifacts/sbom
-syft dir:. --config .syft.yaml
-shasum -a 256 artifacts/sbom/PhotoSuite.cdx.json \
-  artifacts/sbom/PhotoSuite.spdx.json > artifacts/sbom/SHA256SUMS
+scripts/ci/generate-sbom.sh artifacts/sbom
 ```
 
-This configuration is not evidence that `syft` is installed or that the
-commands have run in this repository. Syft creates the two SBOM files;
-the separate `shasum` command creates `SHA256SUMS`. The future release job
-must validate the exact generator syntax for its pinned version and fail if
-any required output is missing.
+The script makes the command sequence and checksum-file order deterministic.
+It does not prove that Syft output is byte-for-byte reproducible across
+machines. A release job must record the Syft version, retain the generated
+files, and compare independent clean generation results before such a claim.
+
+## Signing and notarization gates
+
+The verification workflow cannot sign or notarize. It has read-only repository
+permissions, uses no secrets, and produces no release artifacts. A release is
+blocked until all of these gates have evidence:
+
+1. An approved Apple Developer signing identity and private key are available
+   only to the release environment. The verification workflow must not receive
+   them.
+2. The release job builds the final archive with the reviewed hardened-runtime
+   entitlements, verifies the signing identity and nested-code signatures, and
+   records the signed archive SHA-256.
+3. The release job submits the signed archive with authorized notarization
+   credentials that are restricted to that environment, records the accepted
+   notarization result, staples the ticket, and verifies the stapled archive.
+4. A clean Apple silicon macOS acceptance check verifies the stapled artifact
+   before publication.
+
+## Current release blockers
+
+- There is no independent, clean, byte-for-byte unsigned-build comparison.
+- The new SBOM generation CI step has no recorded public run and no retained
+  release SBOM artifact.
+- No release signing identity, notarization environment, accepted ticket, or
+  stapled artifact is configured or evidenced.
+- No release-candidate acceptance evidence exists for an installed artifact.
+- The application remains pre-alpha and does not claim Lightroom parity.
 
 ## Verification checklist
 
