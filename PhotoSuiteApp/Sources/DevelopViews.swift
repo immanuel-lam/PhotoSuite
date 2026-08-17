@@ -154,6 +154,9 @@ struct DevelopInspector: View {
         BaselineDevelopControls(workspace: workspace)
 
         Divider()
+        RetouchInspector(workspace: workspace)
+
+        Divider()
         DevelopPresetControls(workspace: workspace, name: $presetName)
 
         Divider()
@@ -211,6 +214,311 @@ struct DevelopInspector: View {
         ? "Select a photograph in Library to enable edit controls."
         : "Adjust the selected photograph."
     )
+  }
+}
+
+enum RetouchTool: String, CaseIterable, Identifiable, Sendable {
+  case clone
+  case healing
+  case redEye
+
+  var id: Self { self }
+
+  var title: String {
+    switch self {
+    case .clone: "Clone"
+    case .healing: "Healing"
+    case .redEye: "Red-eye"
+    }
+  }
+}
+
+struct RetouchInspectorModel: Sendable {
+  var tool: RetouchTool = .clone
+  var sourceX = 0.2
+  var sourceY = 0.35
+  var targetX = 0.72
+  var targetY = 0.65
+  var radius = 0.16
+  var feather = 0.3
+  var flow = 0.9
+  var redEyeCenterX = 0.5
+  var redEyeCenterY = 0.5
+  var redEyeRadius = 0.12
+  var redEyeFeather = 0.25
+
+  var validationMessage: String? {
+    switch tool {
+    case .clone, .healing:
+      guard isUnit(sourceX), isUnit(sourceY), isUnit(targetX), isUnit(targetY) else {
+        return "Source and target points must be between 0.00 and 1.00."
+      }
+      guard isBrushRadius(radius) else {
+        return "Brush radius must be greater than 0 and no more than 0.50."
+      }
+      guard isUnit(feather), isUnit(flow) else {
+        return "Feather and flow must be between 0.00 and 1.00."
+      }
+    case .redEye:
+      guard isUnit(redEyeCenterX), isUnit(redEyeCenterY) else {
+        return "Eye centre coordinates must be between 0.00 and 1.00."
+      }
+      guard isBrushRadius(redEyeRadius) else {
+        return "Red-eye radius must be greater than 0 and no more than 0.50."
+      }
+      guard isUnit(redEyeFeather) else {
+        return "Red-eye feather must be between 0.00 and 1.00."
+      }
+    }
+    return nil
+  }
+
+  var operation: EditOperation? {
+    guard validationMessage == nil else { return nil }
+
+    switch tool {
+    case .clone, .healing:
+      guard
+        let source = RetouchPointV1(x: sourceX, y: sourceY),
+        let target = RetouchPointV1(x: targetX, y: targetY),
+        let sample = RetouchBrushSampleV1(point: target, pressure: 1),
+        let brush = RetouchBrushV1(
+          samples: [sample],
+          radius: radius,
+          feather: feather,
+          flow: flow
+        )
+      else { return nil }
+
+      switch tool {
+      case .clone:
+        guard
+          let adjustment = CloneAdjustmentV1(
+            sourceAnchor: source,
+            targetAnchor: target,
+            brush: brush
+          )
+        else { return nil }
+        return .clone(adjustment)
+      case .healing:
+        guard
+          let adjustment = HealingAdjustmentV1(
+            sourceAnchor: source,
+            targetAnchor: target,
+            brush: brush,
+            blend: 1
+          )
+        else { return nil }
+        return .healing(adjustment)
+      case .redEye:
+        return nil
+      }
+    case .redEye:
+      guard
+        let center = RetouchPointV1(x: redEyeCenterX, y: redEyeCenterY),
+        let adjustment = RedEyeAdjustmentV1(
+          center: center,
+          radius: redEyeRadius,
+          feather: redEyeFeather
+        )
+      else { return nil }
+      return .redEye(adjustment)
+    }
+  }
+
+  private func isUnit(_ value: Double) -> Bool {
+    value.isFinite && (0...1).contains(value)
+  }
+
+  private func isBrushRadius(_ value: Double) -> Bool {
+    value.isFinite && value > 0 && value <= 0.5
+  }
+}
+
+@MainActor
+struct RetouchInspector: View {
+  @Bindable var workspace: PhotoWorkspace
+  @State private var draft = RetouchInspectorModel()
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      VStack(alignment: .leading, spacing: 3) {
+        Text("Retouch")
+          .font(.headline)
+        Text("Manual local edits")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+
+      Text(
+        "Place every source, target, or eye centre point yourself. Automatic detection is not used."
+      )
+      .font(.caption)
+      .foregroundStyle(.secondary)
+      .accessibilityIdentifier(ModernUIAccessibility.retouchManualNotice)
+
+      Picker("Tool", selection: $draft.tool) {
+        ForEach(RetouchTool.allCases) { tool in
+          Text(tool.title).tag(tool)
+        }
+      }
+      .pickerStyle(.segmented)
+      .accessibilityIdentifier(ModernUIAccessibility.retouchToolPicker)
+
+      switch draft.tool {
+      case .clone, .healing:
+        RetouchPointPairControls(
+          title: "Source point",
+          x: $draft.sourceX,
+          y: $draft.sourceY,
+          xIdentifier: ModernUIAccessibility.retouchSourceX,
+          yIdentifier: ModernUIAccessibility.retouchSourceY
+        )
+        RetouchPointPairControls(
+          title: "Target point",
+          x: $draft.targetX,
+          y: $draft.targetY,
+          xIdentifier: ModernUIAccessibility.retouchTargetX,
+          yIdentifier: ModernUIAccessibility.retouchTargetY
+        )
+        RetouchSlider(
+          title: "Radius",
+          value: $draft.radius,
+          range: 0.01...0.5,
+          identifier: ModernUIAccessibility.retouchRadius
+        )
+        RetouchSlider(
+          title: "Feather",
+          value: $draft.feather,
+          range: 0...1,
+          identifier: ModernUIAccessibility.retouchFeather
+        )
+        RetouchSlider(
+          title: "Flow",
+          value: $draft.flow,
+          range: 0...1,
+          identifier: ModernUIAccessibility.retouchFlow
+        )
+      case .redEye:
+        RetouchPointPairControls(
+          title: "Eye centre",
+          x: $draft.redEyeCenterX,
+          y: $draft.redEyeCenterY,
+          xIdentifier: ModernUIAccessibility.retouchRedEyeCenterX,
+          yIdentifier: ModernUIAccessibility.retouchRedEyeCenterY
+        )
+        RetouchSlider(
+          title: "Radius",
+          value: $draft.redEyeRadius,
+          range: 0.01...0.5,
+          identifier: ModernUIAccessibility.retouchRedEyeRadius
+        )
+        RetouchSlider(
+          title: "Feather",
+          value: $draft.redEyeFeather,
+          range: 0...1,
+          identifier: ModernUIAccessibility.retouchRedEyeFeather
+        )
+      }
+
+      if let validationMessage = draft.validationMessage {
+        Label(validationMessage, systemImage: "exclamationmark.triangle")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+
+      HStack {
+        Button("Clear", role: .destructive) {
+          clearRetouch()
+        }
+        .accessibilityIdentifier(ModernUIAccessibility.retouchClearButton)
+
+        Spacer()
+
+        Button("Apply") {
+          applyRetouch()
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(draft.operation == nil)
+        .accessibilityIdentifier(ModernUIAccessibility.retouchApplyButton)
+      }
+    }
+    .padding(.vertical, 2)
+    .accessibilityIdentifier(ModernUIAccessibility.retouchInspector)
+  }
+
+  private func applyRetouch() {
+    guard let operation = draft.operation else { return }
+    Task { await workspace.commitDevelopOperation(operation) }
+  }
+
+  private func clearRetouch() {
+    let tool = draft.tool
+    draft = RetouchInspectorModel()
+    draft.tool = tool
+
+    // Retouch families are intentionally discovered by raw value. This keeps
+    // the UI compatible with the existing workflow API while allowing a
+    // workflow version that exposes clone, healing, and red-eye families to
+    // clear the durable operation without touching unrelated adjustments.
+    guard let family = DevelopAdjustmentFamily(rawValue: tool.rawValue) else { return }
+    Task { await workspace.clearDevelopOperation(family) }
+  }
+}
+
+@MainActor
+private struct RetouchPointPairControls: View {
+  let title: String
+  @Binding var x: Double
+  @Binding var y: Double
+  let xIdentifier: String
+  let yIdentifier: String
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Text(title)
+        .font(.subheadline.weight(.semibold))
+      HStack(spacing: 10) {
+        RetouchSlider(
+          title: "X",
+          value: $x,
+          range: 0...1,
+          identifier: xIdentifier
+        )
+        RetouchSlider(
+          title: "Y",
+          value: $y,
+          range: 0...1,
+          identifier: yIdentifier
+        )
+      }
+    }
+  }
+}
+
+@MainActor
+private struct RetouchSlider: View {
+  let title: String
+  @Binding var value: Double
+  let range: ClosedRange<Double>
+  let identifier: String
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 3) {
+      HStack {
+        Text(title)
+        Spacer()
+        Text(value, format: .number.precision(.fractionLength(2)))
+          .monospacedDigit()
+          .foregroundStyle(.secondary)
+      }
+      Slider(value: $value, in: range, step: 0.01)
+        .accessibilityLabel(title)
+        .accessibilityValue(
+          Text(value, format: .number.precision(.fractionLength(2)))
+        )
+        .accessibilityIdentifier(identifier)
+    }
   }
 }
 
