@@ -28,6 +28,30 @@ enum RecipeRenderContractV1 {
   static func saturationFactor(for delta: Double) -> Double {
     1 + delta
   }
+
+  static func whiteBalanceTemperature(for normalizedValue: Double) -> Double {
+    6_500 + normalizedValue * 3_500
+  }
+
+  static func whiteBalanceTint(for normalizedValue: Double) -> Double {
+    normalizedValue * 150
+  }
+
+  static func noiseLevel(for amount: Double) -> Double {
+    amount * 0.1
+  }
+
+  static func sharpenRadius(for amount: Double) -> Double {
+    1 + 2 * amount
+  }
+
+  static func sharpness(for amount: Double) -> Double {
+    2 * amount
+  }
+
+  static func calibrationFactor(for gain: Double) -> Double {
+    1 + gain * 0.5
+  }
 }
 
 enum EditGraphCompiler {
@@ -99,6 +123,45 @@ enum EditGraphCompiler {
         }
         image = try rotateImage(image, degrees: degrees, index: index)
 
+      case .toneCurve(let adjustment):
+        image = try toneCurveImage(image, adjustment: adjustment, index: index)
+
+      case .whiteBalance(let adjustment):
+        image = try whiteBalanceImage(image, adjustment: adjustment, index: index)
+
+      case .transform(let adjustment):
+        image = try transformImage(image, adjustment: adjustment, index: index)
+
+      case .detail(let adjustment):
+        image = try detailImage(image, adjustment: adjustment, index: index)
+
+      case .optics(let adjustment):
+        image = try vignetteImage(
+          image,
+          intensity: -adjustment.vignetteCorrection,
+          index: index,
+          operation: "optics"
+        )
+
+      case .effects(let adjustment):
+        image = try vignetteImage(
+          image,
+          intensity: adjustment.vignetteAmount,
+          index: index,
+          operation: "effects"
+        )
+
+      case .calibration(let adjustment):
+        image = try calibrationImage(image, adjustment: adjustment, index: index)
+
+      case .blackAndWhite(let adjustment):
+        image = try blackAndWhiteImage(image, adjustment: adjustment, index: index)
+
+      case .hdr:
+        // Version 1 records HDR intent. The current extended-range graph already
+        // preserves available headroom and does not add an HDR output transform.
+        break
+
       case .unknown(let kind, _):
         throw RenderCoreError.unsupportedOperation(index: index, kind: kind)
       }
@@ -132,6 +195,168 @@ enum EditGraphCompiler {
       throw invalid(index, operation)
     }
     return output
+  }
+
+  private static func toneCurveImage(
+    _ image: CIImage,
+    adjustment: ToneCurveAdjustmentV1,
+    index: Int
+  ) throws -> CIImage {
+    if adjustment.blackPoint == 0,
+      adjustment.shadows == 0.25,
+      adjustment.midtones == 0.5,
+      adjustment.highlights == 0.75,
+      adjustment.whitePoint == 1
+    {
+      return image
+    }
+    let filter = CIFilter.toneCurve()
+    filter.inputImage = image
+    filter.point0 = CGPoint(x: 0, y: adjustment.blackPoint)
+    filter.point1 = CGPoint(x: 0.25, y: adjustment.shadows)
+    filter.point2 = CGPoint(x: 0.5, y: adjustment.midtones)
+    filter.point3 = CGPoint(x: 0.75, y: adjustment.highlights)
+    filter.point4 = CGPoint(x: 1, y: adjustment.whitePoint)
+    if #available(macOS 26, *) {
+      filter.extrapolate = true
+    }
+    return try output(of: filter, index: index, operation: "toneCurve")
+  }
+
+  private static func whiteBalanceImage(
+    _ image: CIImage,
+    adjustment: WhiteBalanceAdjustmentV1,
+    index: Int
+  ) throws -> CIImage {
+    guard adjustment.temperature != 0 || adjustment.tint != 0 else { return image }
+    let filter = CIFilter.temperatureAndTint()
+    filter.inputImage = image
+    filter.neutral = CIVector(x: 6_500, y: 0)
+    filter.targetNeutral = CIVector(
+      x: RecipeRenderContractV1.whiteBalanceTemperature(for: adjustment.temperature),
+      y: RecipeRenderContractV1.whiteBalanceTint(for: adjustment.tint)
+    )
+    return try output(of: filter, index: index, operation: "whiteBalance")
+  }
+
+  private static func transformImage(
+    _ image: CIImage,
+    adjustment: TransformAdjustmentV1,
+    index: Int
+  ) throws -> CIImage {
+    var transformed = image
+    if adjustment.flipHorizontal || adjustment.flipVertical {
+      let extent = transformed.extent
+      let flip = CGAffineTransform(
+        a: adjustment.flipHorizontal ? -1 : 1,
+        b: 0,
+        c: 0,
+        d: adjustment.flipVertical ? -1 : 1,
+        tx: adjustment.flipHorizontal ? extent.width : 0,
+        ty: adjustment.flipVertical ? extent.height : 0
+      )
+      transformed = normalizeOrigin(transformed.transformed(by: flip))
+    }
+    guard adjustment.straightenDegrees != 0 else { return transformed }
+    return try rotateImage(
+      transformed,
+      degrees: adjustment.straightenDegrees,
+      index: index,
+      operation: "transform"
+    )
+  }
+
+  private static func detailImage(
+    _ image: CIImage,
+    adjustment: DetailAdjustmentV1,
+    index: Int
+  ) throws -> CIImage {
+    var adjusted = image
+    if adjustment.luminanceNoiseReduction > 0 {
+      let filter = CIFilter.noiseReduction()
+      filter.inputImage = adjusted
+      filter.noiseLevel = Float(
+        RecipeRenderContractV1.noiseLevel(for: adjustment.luminanceNoiseReduction)
+      )
+      filter.sharpness = 0
+      adjusted = try output(of: filter, index: index, operation: "detail")
+    }
+    if adjustment.sharpening > 0 {
+      let filter = CIFilter.sharpenLuminance()
+      filter.inputImage = adjusted
+      filter.radius = Float(RecipeRenderContractV1.sharpenRadius(for: adjustment.sharpening))
+      filter.sharpness = Float(RecipeRenderContractV1.sharpness(for: adjustment.sharpening))
+      adjusted = try output(of: filter, index: index, operation: "detail")
+    }
+    return adjusted
+  }
+
+  private static func vignetteImage(
+    _ image: CIImage,
+    intensity: Double,
+    index: Int,
+    operation: String
+  ) throws -> CIImage {
+    guard intensity != 0 else { return image }
+    let filter = CIFilter.vignette()
+    filter.inputImage = image
+    filter.intensity = Float(intensity)
+    filter.radius = 1
+    return try output(of: filter, index: index, operation: operation)
+  }
+
+  private static func calibrationImage(
+    _ image: CIImage,
+    adjustment: CalibrationAdjustmentV1,
+    index: Int
+  ) throws -> CIImage {
+    guard adjustment.redGain != 0 || adjustment.greenGain != 0 || adjustment.blueGain != 0
+    else { return image }
+    let filter = CIFilter.colorMatrix()
+    filter.inputImage = image
+    filter.rVector = CIVector(
+      x: RecipeRenderContractV1.calibrationFactor(for: adjustment.redGain),
+      y: 0,
+      z: 0,
+      w: 0
+    )
+    filter.gVector = CIVector(
+      x: 0,
+      y: RecipeRenderContractV1.calibrationFactor(for: adjustment.greenGain),
+      z: 0,
+      w: 0
+    )
+    filter.bVector = CIVector(
+      x: 0,
+      y: 0,
+      z: RecipeRenderContractV1.calibrationFactor(for: adjustment.blueGain),
+      w: 0
+    )
+    filter.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
+    filter.biasVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+    return try output(of: filter, index: index, operation: "calibration")
+  }
+
+  private static func blackAndWhiteImage(
+    _ image: CIImage,
+    adjustment: BlackAndWhiteAdjustmentV1,
+    index: Int
+  ) throws -> CIImage {
+    let sum = adjustment.redWeight + adjustment.greenWeight + adjustment.blueWeight
+    let mix = CIVector(
+      x: adjustment.redWeight / sum,
+      y: adjustment.greenWeight / sum,
+      z: adjustment.blueWeight / sum,
+      w: 0
+    )
+    let filter = CIFilter.colorMatrix()
+    filter.inputImage = image
+    filter.rVector = mix
+    filter.gVector = mix
+    filter.bVector = mix
+    filter.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
+    filter.biasVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+    return try output(of: filter, index: index, operation: "blackAndWhite")
   }
 
   private static func highlightCoefficients(_ delta: Double) -> CIVector {
@@ -173,7 +398,8 @@ enum EditGraphCompiler {
   private static func rotateImage(
     _ image: CIImage,
     degrees: Double,
-    index: Int
+    index: Int,
+    operation: String = "rotationDegrees"
   ) throws -> CIImage {
     let normalizedDegrees = degrees.truncatingRemainder(dividingBy: 360)
     let positiveDegrees = normalizedDegrees < 0 ? normalizedDegrees + 360 : normalizedDegrees
@@ -209,7 +435,7 @@ enum EditGraphCompiler {
     let rotated = image.transformed(by: transform)
     let boundingBox = extent.applying(transform).integral
     guard validExtent(boundingBox) else {
-      throw invalid(index, "rotationDegrees")
+      throw invalid(index, operation)
     }
     let transparentCanvas = CIImage(color: .clear).cropped(to: boundingBox)
     return

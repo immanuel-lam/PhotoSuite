@@ -894,7 +894,16 @@ public final class PhotoWorkspace {
       case .threeWayColorGrade: 5
       case .normalizedCrop: 6
       case .rotationDegrees: 7
-      case .unknown: 8
+      case .toneCurve: 8
+      case .whiteBalance: 9
+      case .transform: 10
+      case .detail: 11
+      case .optics: 12
+      case .effects: 13
+      case .calibration: 14
+      case .blackAndWhite: 15
+      case .hdr: 16
+      case .unknown: 17
       }
     }
     return operations.enumerated().sorted { left, right in

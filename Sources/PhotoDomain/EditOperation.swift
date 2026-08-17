@@ -11,6 +11,15 @@ public enum EditOperation: Codable, Hashable, Sendable {
   case threeWayColorGrade(ThreeWayColorGrade)
   case normalizedCrop(NormalizedRect)
   case rotationDegrees(Double)
+  case toneCurve(ToneCurveAdjustmentV1)
+  case whiteBalance(WhiteBalanceAdjustmentV1)
+  case transform(TransformAdjustmentV1)
+  case detail(DetailAdjustmentV1)
+  case optics(OpticsAdjustmentV1)
+  case effects(EffectsAdjustmentV1)
+  case calibration(CalibrationAdjustmentV1)
+  case blackAndWhite(BlackAndWhiteAdjustmentV1)
+  case hdr(HDRAdjustmentV1)
   case unknown(String, payload: [String: JSONValue])
 
   private static let reservedKinds: Set<String> = [
@@ -22,6 +31,15 @@ public enum EditOperation: Codable, Hashable, Sendable {
     "threeWayColorGrade",
     "normalizedCrop",
     "rotationDegrees",
+    "toneCurve",
+    "whiteBalance",
+    "transform",
+    "detail",
+    "optics",
+    "effects",
+    "calibration",
+    "blackAndWhite",
+    "hdr",
   ]
 
   public init(from decoder: any Decoder) throws {
@@ -30,6 +48,7 @@ public enum EditOperation: Codable, Hashable, Sendable {
     let valueKey = DynamicCodingKey(stringValue: "value")
     let rectKey = DynamicCodingKey(stringValue: "rect")
     let gradeKey = DynamicCodingKey(stringValue: "grade")
+    let adjustmentKey = DynamicCodingKey(stringValue: "adjustment")
     let decodedKind = try UnknownStringCodeCoding.decode(
       from: container.superDecoder(forKey: kindKey)
     )
@@ -51,6 +70,35 @@ public enum EditOperation: Codable, Hashable, Sendable {
       self = .normalizedCrop(try container.decode(NormalizedRect.self, forKey: rectKey))
     case ("rotationDegrees", false):
       self = .rotationDegrees(try container.decode(Double.self, forKey: valueKey))
+    case ("toneCurve", false) where Self.hasVersionOneAdjustment(container, key: adjustmentKey):
+      self = .toneCurve(try container.decode(ToneCurveAdjustmentV1.self, forKey: adjustmentKey))
+    case ("whiteBalance", false)
+    where Self.hasVersionOneAdjustment(container, key: adjustmentKey):
+      self = .whiteBalance(
+        try container.decode(WhiteBalanceAdjustmentV1.self, forKey: adjustmentKey)
+      )
+    case ("transform", false) where Self.hasVersionOneAdjustment(container, key: adjustmentKey):
+      self = .transform(
+        try container.decode(TransformAdjustmentV1.self, forKey: adjustmentKey)
+      )
+    case ("detail", false) where Self.hasVersionOneAdjustment(container, key: adjustmentKey):
+      self = .detail(try container.decode(DetailAdjustmentV1.self, forKey: adjustmentKey))
+    case ("optics", false) where Self.hasVersionOneAdjustment(container, key: adjustmentKey):
+      self = .optics(try container.decode(OpticsAdjustmentV1.self, forKey: adjustmentKey))
+    case ("effects", false) where Self.hasVersionOneAdjustment(container, key: adjustmentKey):
+      self = .effects(try container.decode(EffectsAdjustmentV1.self, forKey: adjustmentKey))
+    case ("calibration", false)
+    where Self.hasVersionOneAdjustment(container, key: adjustmentKey):
+      self = .calibration(
+        try container.decode(CalibrationAdjustmentV1.self, forKey: adjustmentKey)
+      )
+    case ("blackAndWhite", false)
+    where Self.hasVersionOneAdjustment(container, key: adjustmentKey):
+      self = .blackAndWhite(
+        try container.decode(BlackAndWhiteAdjustmentV1.self, forKey: adjustmentKey)
+      )
+    case ("hdr", false) where Self.hasVersionOneAdjustment(container, key: adjustmentKey):
+      self = .hdr(try container.decode(HDRAdjustmentV1.self, forKey: adjustmentKey))
     default:
       var payload: [String: JSONValue] = [:]
       for key in container.allKeys where key != kindKey {
@@ -66,6 +114,7 @@ public enum EditOperation: Codable, Hashable, Sendable {
     let valueKey = DynamicCodingKey(stringValue: "value")
     let rectKey = DynamicCodingKey(stringValue: "rect")
     let gradeKey = DynamicCodingKey(stringValue: "grade")
+    let adjustmentKey = DynamicCodingKey(stringValue: "adjustment")
 
     switch self {
     case .exposureEV(let value):
@@ -92,6 +141,33 @@ public enum EditOperation: Codable, Hashable, Sendable {
     case .rotationDegrees(let value):
       try container.encode("rotationDegrees", forKey: kindKey)
       try container.encode(value, forKey: valueKey)
+    case .toneCurve(let adjustment):
+      try container.encode("toneCurve", forKey: kindKey)
+      try container.encode(adjustment, forKey: adjustmentKey)
+    case .whiteBalance(let adjustment):
+      try container.encode("whiteBalance", forKey: kindKey)
+      try container.encode(adjustment, forKey: adjustmentKey)
+    case .transform(let adjustment):
+      try container.encode("transform", forKey: kindKey)
+      try container.encode(adjustment, forKey: adjustmentKey)
+    case .detail(let adjustment):
+      try container.encode("detail", forKey: kindKey)
+      try container.encode(adjustment, forKey: adjustmentKey)
+    case .optics(let adjustment):
+      try container.encode("optics", forKey: kindKey)
+      try container.encode(adjustment, forKey: adjustmentKey)
+    case .effects(let adjustment):
+      try container.encode("effects", forKey: kindKey)
+      try container.encode(adjustment, forKey: adjustmentKey)
+    case .calibration(let adjustment):
+      try container.encode("calibration", forKey: kindKey)
+      try container.encode(adjustment, forKey: adjustmentKey)
+    case .blackAndWhite(let adjustment):
+      try container.encode("blackAndWhite", forKey: kindKey)
+      try container.encode(adjustment, forKey: adjustmentKey)
+    case .hdr(let adjustment):
+      try container.encode("hdr", forKey: kindKey)
+      try container.encode(adjustment, forKey: adjustmentKey)
     case .unknown(let kind, let payload):
       for (key, value) in payload where key != kindKey.stringValue {
         try container.encode(value, forKey: DynamicCodingKey(stringValue: key))
@@ -102,5 +178,17 @@ public enum EditOperation: Codable, Hashable, Sendable {
         to: container.superEncoder(forKey: kindKey)
       )
     }
+  }
+
+  private static func hasVersionOneAdjustment(
+    _ container: KeyedDecodingContainer<DynamicCodingKey>,
+    key: DynamicCodingKey
+  ) -> Bool {
+    guard
+      let value = try? container.decode(JSONValue.self, forKey: key),
+      case .object(let object) = value,
+      case .number(let version)? = object["schemaVersion"]
+    else { return false }
+    return version == 1
   }
 }
