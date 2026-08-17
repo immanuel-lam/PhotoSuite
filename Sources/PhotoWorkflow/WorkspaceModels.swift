@@ -219,12 +219,41 @@ public struct DeliverOptions: Codable, Hashable, Sendable {
   }
 
   public var unsupportedFeatures: [String] {
-    var features: [String] = []
-    if resize != .original { features.append("Resize") }
-    if metadata != .basic { features.append("Metadata") }
-    if watermark != .none { features.append("Watermark") }
-    if outputSharpening != .none { features.append("Output sharpening") }
-    return features
+    []
+  }
+
+  public var exportOptions: ExportOptions {
+    ExportOptions(
+      resize: {
+        switch resize {
+        case .original: .original
+        case .longEdge(let pixels): .longEdge(pixels)
+        case .dimensions(let width, let height): .dimensions(width: width, height: height)
+        }
+      }(),
+      metadata: {
+        switch metadata {
+        case .basic: .basic
+        case .copyrightOnly: .copyrightOnly
+        case .all: .all
+        case .none: .none
+        }
+      }(),
+      watermark: {
+        switch watermark {
+        case .none: .none
+        case .text(let value): .text(value)
+        }
+      }(),
+      outputSharpening: {
+        switch outputSharpening {
+        case .none: .none
+        case .screenStandard: .screenStandard
+        case .screenHigh: .screenHigh
+        case .printStandard: .printStandard
+        }
+      }()
+    )
   }
 }
 

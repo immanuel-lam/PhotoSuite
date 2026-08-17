@@ -801,7 +801,8 @@ public final class PhotoWorkspace {
             recipe: recipe,
             destinationURL: destinationURL,
             format: .jpeg,
-            quality: quality
+            quality: quality,
+            options: options.exportOptions
           )
         )
         if started { await sourceAccess.stop(url) }

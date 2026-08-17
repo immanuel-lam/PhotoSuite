@@ -58,6 +58,204 @@ final class JPEGExportTests: XCTestCase {
     XCTAssertNotNil(result.derivative.fingerprint)
   }
 
+  func testExportResizeLongEdgeProducesExpectedDimensionsWithoutUpscaling() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let destination = fixture.directory.appendingPathComponent("resized.jpg")
+    let exporter = AtomicJPEGExporter(
+      decoder: try DeterministicImageFixture.makeCommonImageDecoder())
+
+    _ = try await exporter.export(
+      ExportRequest(
+        sourceURL: fixture.source,
+        recipe: makeRecipe(),
+        destinationURL: destination,
+        format: .jpeg,
+        quality: 0.9,
+        options: ExportOptions(resize: .longEdge(4))
+      )
+    )
+
+    let source = try XCTUnwrap(CGImageSourceCreateWithURL(destination as CFURL, nil))
+    let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+    XCTAssertEqual([image.width, image.height], [4, 3])
+  }
+
+  func testAllMetadataRetainsEXIFAndSRGBProfileWhileNoneRemovesSourceMetadata() async throws {
+    let directory = try DeterministicImageFixture.makeDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let source = try DeterministicImageFixture.makeMetadataTIFF(in: directory)
+    let allDestination = directory.appendingPathComponent("all-metadata.jpg")
+    let basicDestination = directory.appendingPathComponent("basic-metadata.jpg")
+    let copyrightDestination = directory.appendingPathComponent("copyright-metadata.jpg")
+    let noneDestination = directory.appendingPathComponent("no-metadata.jpg")
+    let exporter = AtomicJPEGExporter(
+      decoder: try DeterministicImageFixture.makeCommonImageDecoder())
+
+    _ = try await exporter.export(
+      makeRequest(
+        source: source,
+        destination: basicDestination,
+        options: ExportOptions(metadata: .basic)
+      )
+    )
+    _ = try await exporter.export(
+      makeRequest(
+        source: source,
+        destination: copyrightDestination,
+        options: ExportOptions(metadata: .copyrightOnly)
+      )
+    )
+    _ = try await exporter.export(
+      makeRequest(
+        source: source,
+        destination: allDestination,
+        options: ExportOptions(metadata: .all)
+      )
+    )
+    _ = try await exporter.export(
+      makeRequest(
+        source: source,
+        destination: noneDestination,
+        options: ExportOptions(metadata: .none)
+      )
+    )
+
+    let allProperties = try imageProperties(at: allDestination)
+    let allExif = try XCTUnwrap(allProperties[kCGImagePropertyExifDictionary] as? [CFString: Any])
+    XCTAssertEqual(allExif[kCGImagePropertyExifLensModel] as? String, "PhotoSuite Test Lens")
+    XCTAssertEqual(
+      allExif[kCGImagePropertyExifDateTimeOriginal] as? String,
+      "2024:01:02 03:04:05"
+    )
+    XCTAssertNotNil(allProperties[kCGImagePropertyGPSDictionary])
+    XCTAssertTrue(
+      try XCTUnwrap(allProperties[kCGImagePropertyProfileName] as? String)
+        .localizedCaseInsensitiveContains("srgb")
+    )
+
+    let basicProperties = try imageProperties(at: basicDestination)
+    let basicExif = try XCTUnwrap(
+      basicProperties[kCGImagePropertyExifDictionary] as? [CFString: Any]
+    )
+    XCTAssertEqual(basicExif[kCGImagePropertyExifLensModel] as? String, "PhotoSuite Test Lens")
+    XCTAssertNil(basicProperties[kCGImagePropertyGPSDictionary])
+
+    let copyrightProperties = try imageProperties(at: copyrightDestination)
+    let copyrightExif = copyrightProperties[kCGImagePropertyExifDictionary] as? [CFString: Any]
+    XCTAssertNil(copyrightExif?[kCGImagePropertyExifLensModel])
+    XCTAssertNil(copyrightProperties[kCGImagePropertyGPSDictionary])
+    let copyrightTIFF = try XCTUnwrap(
+      copyrightProperties[kCGImagePropertyTIFFDictionary] as? [CFString: Any]
+    )
+    XCTAssertEqual(
+      copyrightTIFF[kCGImagePropertyTIFFArtist] as? String,
+      "PhotoSuite Test Artist"
+    )
+    XCTAssertEqual(
+      copyrightTIFF[kCGImagePropertyTIFFCopyright] as? String,
+      "PhotoSuite Test Copyright"
+    )
+
+    let noneProperties = try imageProperties(at: noneDestination)
+    let noneExif = noneProperties[kCGImagePropertyExifDictionary] as? [CFString: Any]
+    XCTAssertNil(noneExif?[kCGImagePropertyExifLensModel])
+    XCTAssertNil(noneExif?[kCGImagePropertyExifDateTimeOriginal])
+    XCTAssertNil(noneProperties[kCGImagePropertyGPSDictionary])
+    let noneTIFF = noneProperties[kCGImagePropertyTIFFDictionary] as? [CFString: Any]
+    XCTAssertNil(noneTIFF?[kCGImagePropertyTIFFArtist])
+    XCTAssertNil(noneTIFF?[kCGImagePropertyTIFFCopyright])
+    XCTAssertTrue(
+      try XCTUnwrap(noneProperties[kCGImagePropertyProfileName] as? String)
+        .localizedCaseInsensitiveContains("srgb")
+    )
+  }
+
+  func testTextWatermarkChangesBottomRightPixelsWithoutChangingDimensions() async throws {
+    let directory = try DeterministicImageFixture.makeDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let source = try DeterministicImageFixture.makeMetadataTIFF(
+      in: directory,
+      width: 320,
+      height: 240
+    )
+    let sourceChecksum = try DeterministicImageFixture.checksum(of: source)
+    let plainDestination = directory.appendingPathComponent("plain.jpg")
+    let watermarkedDestination = directory.appendingPathComponent("watermarked.jpg")
+    let exporter = AtomicJPEGExporter(
+      decoder: try DeterministicImageFixture.makeCommonImageDecoder())
+
+    _ = try await exporter.export(makeRequest(source: source, destination: plainDestination))
+    _ = try await exporter.export(
+      makeRequest(
+        source: source,
+        destination: watermarkedDestination,
+        options: ExportOptions(metadata: .none, watermark: .text("PhotoSuite"))
+      )
+    )
+
+    let plain = try decodedImage(at: plainDestination)
+    let watermarked = try decodedImage(at: watermarkedDestination)
+    XCTAssertEqual([watermarked.width, watermarked.height], [plain.width, plain.height])
+    let plainPixels = try DeterministicImageFixture.rgba8Data(from: plain)
+    let watermarkedPixels = try DeterministicImageFixture.rgba8Data(from: watermarked)
+    XCTAssertGreaterThan(
+      pixelDifferenceCount(
+        plainPixels,
+        watermarkedPixels,
+        width: plain.width,
+        xRange: 160..<320,
+        yRange: 140..<240
+      ),
+      100
+    )
+    let watermarkedProperties = try imageProperties(at: watermarkedDestination)
+    let watermarkedExif =
+      watermarkedProperties[kCGImagePropertyExifDictionary]
+      as? [CFString: Any]
+    XCTAssertNil(watermarkedExif?[kCGImagePropertyExifLensModel])
+    XCTAssertNil(watermarkedProperties[kCGImagePropertyGPSDictionary])
+    XCTAssertEqual(try DeterministicImageFixture.checksum(of: source), sourceChecksum)
+  }
+
+  func testOutputSharpeningChangesRenderedPixelsWithoutChangingDimensions() async throws {
+    let directory = try DeterministicImageFixture.makeDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let source = try DeterministicImageFixture.makePNG(
+      in: directory,
+      width: 160,
+      height: 120
+    )
+    let plainDestination = directory.appendingPathComponent("unsharpened.jpg")
+    let sharpenedDestination = directory.appendingPathComponent("sharpened.jpg")
+    let exporter = AtomicJPEGExporter(
+      decoder: try DeterministicImageFixture.makeCommonImageDecoder())
+
+    _ = try await exporter.export(makeRequest(source: source, destination: plainDestination))
+    _ = try await exporter.export(
+      makeRequest(
+        source: source,
+        destination: sharpenedDestination,
+        options: ExportOptions(outputSharpening: .screenHigh)
+      )
+    )
+
+    let plain = try decodedImage(at: plainDestination)
+    let sharpened = try decodedImage(at: sharpenedDestination)
+    XCTAssertEqual([sharpened.width, sharpened.height], [plain.width, plain.height])
+    XCTAssertGreaterThan(
+      pixelDifferenceCount(
+        try DeterministicImageFixture.rgba8Data(from: plain),
+        try DeterministicImageFixture.rgba8Data(from: sharpened),
+        width: plain.width,
+        xRange: 0..<plain.width,
+        yRange: 0..<plain.height,
+        threshold: 2
+      ),
+      100
+    )
+  }
+
   func testExportAtomicallyReplacesExistingDestinationWithoutTemporarySibling() async throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
@@ -127,7 +325,16 @@ final class JPEGExportTests: XCTestCase {
       publisher: SystemAtomicFilePublisher(),
       publicationGate: gate
     )
-    let request = makeRequest(source: fixture.source, destination: destination)
+    let request = makeRequest(
+      source: fixture.source,
+      destination: destination,
+      options: ExportOptions(
+        resize: .longEdge(4),
+        metadata: .none,
+        watermark: .text("W"),
+        outputSharpening: .screenStandard
+      )
+    )
 
     let exportTask = Task {
       try await exporter.export(request)
@@ -289,6 +496,37 @@ final class JPEGExportTests: XCTestCase {
       request: makeRequest(source: fixture.source, destination: fixture.source),
       expected: .sourceDestinationConflict(fixture.source)
     )
+    await assertExportError(
+      exporter,
+      request: makeRequest(
+        source: fixture.source,
+        destination: destination,
+        options: ExportOptions(resize: .dimensions(width: 0, height: 10))
+      ),
+      expected: .invalidExportResize("Width and height must be greater than zero.")
+    )
+  }
+
+  func testExportRejectsOversizedWatermarkWithoutPublishingOrChangingSource() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let destination = fixture.directory.appendingPathComponent("invalid-watermark.jpg")
+    let sourceChecksum = try DeterministicImageFixture.checksum(of: fixture.source)
+    let exporter = AtomicJPEGExporter(
+      decoder: try DeterministicImageFixture.makeCommonImageDecoder())
+
+    await assertExportError(
+      exporter,
+      request: makeRequest(
+        source: fixture.source,
+        destination: destination,
+        options: ExportOptions(watermark: .text(String(repeating: "W", count: 257)))
+      ),
+      expected: .invalidWatermark("Text watermarks must contain at most 256 characters.")
+    )
+
+    XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+    XCTAssertEqual(try DeterministicImageFixture.checksum(of: fixture.source), sourceChecksum)
   }
 
   func testExportRejectsDecoderIdentifierAndVersionPinMismatches() async throws {
@@ -353,15 +591,52 @@ final class JPEGExportTests: XCTestCase {
   private func makeRequest(
     source: URL,
     destination: URL,
-    recipe: EditRecipe? = nil
+    recipe: EditRecipe? = nil,
+    options: ExportOptions = ExportOptions()
   ) -> ExportRequest {
     ExportRequest(
       sourceURL: source,
       recipe: recipe ?? makeRecipe(),
       destinationURL: destination,
       format: .jpeg,
-      quality: 0.9
+      quality: 0.9,
+      options: options
     )
+  }
+
+  private func imageProperties(at url: URL) throws -> [CFString: Any] {
+    let source = try XCTUnwrap(CGImageSourceCreateWithURL(url as CFURL, nil))
+    return try XCTUnwrap(
+      CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+    )
+  }
+
+  private func decodedImage(at url: URL) throws -> CGImage {
+    let source = try XCTUnwrap(CGImageSourceCreateWithURL(url as CFURL, nil))
+    return try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+  }
+
+  private func pixelDifferenceCount(
+    _ lhs: Data,
+    _ rhs: Data,
+    width: Int,
+    xRange: Range<Int>,
+    yRange: Range<Int>,
+    threshold: Int = 8
+  ) -> Int {
+    var count = 0
+    for y in yRange {
+      for x in xRange {
+        let offset = (y * width + x) * 4
+        if abs(Int(lhs[offset]) - Int(rhs[offset])) > threshold
+          || abs(Int(lhs[offset + 1]) - Int(rhs[offset + 1])) > threshold
+          || abs(Int(lhs[offset + 2]) - Int(rhs[offset + 2])) > threshold
+        {
+          count += 1
+        }
+      }
+    }
+    return count
   }
 
   private func makeRecipe(operations: [EditOperation] = []) -> EditRecipe {

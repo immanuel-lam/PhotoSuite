@@ -621,7 +621,7 @@ final class PhotoWorkspaceTests: XCTestCase {
     XCTAssertEqual(workspace.stack(containing: green.id)?.isExpanded, false)
   }
 
-  func testUnsupportedDeliverOptionsDoNotReachTheCurrentExporter() async throws {
+  func testDeliverOptionsReachTheExporter() async throws {
     let asset = makeAsset(name: "deliver.jpg")
     let recipe = makeRecipe(assetID: asset.id)
     let catalog = CatalogSpy(assets: [asset], recipes: [asset.id: recipe])
@@ -630,9 +630,9 @@ final class PhotoWorkspaceTests: XCTestCase {
     await workspace.reopen()
     let options = DeliverOptions(
       resize: .longEdge(2_048),
-      metadata: .basic,
-      watermark: .none,
-      outputSharpening: .none
+      metadata: .copyrightOnly,
+      watermark: .text("PhotoSuite"),
+      outputSharpening: .screenStandard
     )
 
     await workspace.exportJPEG(
@@ -641,9 +641,18 @@ final class PhotoWorkspaceTests: XCTestCase {
       options: options
     )
 
-    let request = await exporter.lastRequest()
-    XCTAssertNil(request)
-    XCTAssertEqual(workspace.lastError, .unsupportedDeliverOptions(["Resize"]))
+    let capturedRequest = await exporter.lastRequest()
+    let request = try XCTUnwrap(capturedRequest)
+    XCTAssertEqual(
+      request.options,
+      ExportOptions(
+        resize: .longEdge(2_048),
+        metadata: .copyrightOnly,
+        watermark: .text("PhotoSuite"),
+        outputSharpening: .screenStandard
+      )
+    )
+    XCTAssertNil(workspace.lastError)
   }
 }
 

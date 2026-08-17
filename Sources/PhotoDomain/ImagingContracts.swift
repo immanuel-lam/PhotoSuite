@@ -316,25 +316,101 @@ public enum ExportFormat: Codable, Hashable, Sendable {
   }
 }
 
+public enum ExportResize: Codable, Hashable, Sendable {
+  case original
+  case longEdge(Int)
+  case dimensions(width: Int, height: Int)
+}
+
+public enum ExportMetadataPolicy: String, Codable, CaseIterable, Hashable, Sendable {
+  case basic
+  case copyrightOnly
+  case all
+  case none
+}
+
+public enum ExportWatermark: Codable, Hashable, Sendable {
+  case none
+  case text(String)
+}
+
+public enum ExportOutputSharpening: String, Codable, CaseIterable, Hashable, Sendable {
+  case none
+  case screenStandard
+  case screenHigh
+  case printStandard
+}
+
+public struct ExportOptions: Codable, Hashable, Sendable {
+  public let resize: ExportResize
+  public let metadata: ExportMetadataPolicy
+  public let watermark: ExportWatermark
+  public let outputSharpening: ExportOutputSharpening
+
+  public init(
+    resize: ExportResize = .original,
+    metadata: ExportMetadataPolicy = .basic,
+    watermark: ExportWatermark = .none,
+    outputSharpening: ExportOutputSharpening = .none
+  ) {
+    self.resize = resize
+    self.metadata = metadata
+    self.watermark = watermark
+    self.outputSharpening = outputSharpening
+  }
+}
+
 public struct ExportRequest: Codable, Hashable, Sendable {
   public let sourceURL: URL
   public let recipe: EditRecipe
   public let destinationURL: URL
   public let format: ExportFormat
   public let quality: Double?
+  public let options: ExportOptions
 
   public init(
     sourceURL: URL,
     recipe: EditRecipe,
     destinationURL: URL,
     format: ExportFormat,
-    quality: Double?
+    quality: Double?,
+    options: ExportOptions = ExportOptions()
   ) {
     self.sourceURL = sourceURL
     self.recipe = recipe
     self.destinationURL = destinationURL
     self.format = format
     self.quality = quality
+    self.options = options
+  }
+
+  public init(from decoder: any Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    sourceURL = try container.decode(URL.self, forKey: .sourceURL)
+    recipe = try container.decode(EditRecipe.self, forKey: .recipe)
+    destinationURL = try container.decode(URL.self, forKey: .destinationURL)
+    format = try container.decode(ExportFormat.self, forKey: .format)
+    quality = try container.decodeIfPresent(Double.self, forKey: .quality)
+    options = try container.decodeIfPresent(ExportOptions.self, forKey: .options) ?? ExportOptions()
+  }
+
+  public func encode(to encoder: any Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(sourceURL, forKey: .sourceURL)
+    try container.encode(recipe, forKey: .recipe)
+    try container.encode(destinationURL, forKey: .destinationURL)
+    try container.encode(format, forKey: .format)
+    try container.encodeIfPresent(quality, forKey: .quality)
+    try container.encode(options, forKey: .options)
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case sourceURL
+    case recipe
+    case destinationURL
+    case format
+    case quality
+    case options
   }
 }
 

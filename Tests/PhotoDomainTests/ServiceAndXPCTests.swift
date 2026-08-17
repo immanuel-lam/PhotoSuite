@@ -126,6 +126,35 @@ final class ServiceAndXPCTests: XCTestCase {
     XCTAssertEqual(decoded.payload, Data([0x00, 0x7F, 0xFF]))
   }
 
+  func testLegacyExportRequestWithoutOptionsDecodesWithSafeDefaults() throws {
+    let request = ExportRequest(
+      sourceURL: URL(fileURLWithPath: "/tmp/source.raw"),
+      recipe: EditRecipe(
+        assetID: UUID(),
+        pins: EnginePins(
+          decoderIdentifier: "com.apple.coreimage.common-image",
+          decoderVersion: "system-default",
+          renderSchemaVersion: 1,
+          cameraProfileVersion: nil,
+          modelVersions: [:]
+        )
+      ),
+      destinationURL: URL(fileURLWithPath: "/tmp/output.jpg"),
+      format: .jpeg,
+      quality: 0.9
+    )
+    let encoded = try JSONEncoder().encode(request)
+    var object = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+    )
+    object.removeValue(forKey: "options")
+
+    let legacyData = try JSONSerialization.data(withJSONObject: object)
+    let decoded = try JSONDecoder().decode(ExportRequest.self, from: legacyData)
+
+    XCTAssertEqual(decoded.options, ExportOptions())
+  }
+
   func testPhotoPluginXPCResponsePreservesOpaquePayloadAndStructuredError() throws {
     let requestID = UUID(uuidString: "33333333-AAAA-BBBB-CCCC-444444444444")!
     let envelope = PhotoPluginXPC.ResponseEnvelope(

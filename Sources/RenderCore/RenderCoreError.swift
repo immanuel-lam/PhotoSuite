@@ -20,6 +20,8 @@ public enum RenderCoreError: Error, Equatable, LocalizedError, Sendable {
   case unsupportedExportFormat(String)
   case unsupportedOutputColorSpace(String)
   case invalidJPEGQuality(Double)
+  case invalidExportResize(String)
+  case invalidWatermark(String)
   case invalidDestination(URL)
   case sourceDestinationConflict(URL)
   case jpegEncodingFailed(URL)
