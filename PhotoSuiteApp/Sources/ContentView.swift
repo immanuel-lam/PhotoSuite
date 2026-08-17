@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import AppKit
+import PhotoDomain
 import PhotoWorkflow
 import SwiftUI
 import UniformTypeIdentifiers
@@ -105,6 +106,8 @@ private struct WorkspaceCommandBar: View {
   var body: some View {
     HStack(spacing: 10) {
       if workspace.section == .library {
+        LibraryFilterControl(workspace: workspace)
+
         GlassControlGroup {
           HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
@@ -153,6 +156,82 @@ private struct WorkspaceCommandBar: View {
           .modifier(GlassButtonWhenAvailable(prominent: workspace.proofMode))
         }
       }
+    }
+  }
+}
+
+@MainActor
+private struct LibraryFilterControl: View {
+  @Bindable var workspace: PhotoWorkspace
+
+  var body: some View {
+    GlassControlGroup {
+      Menu {
+        Section("Rating") {
+          ForEach(0...5, id: \.self) { rating in
+            Button {
+              workspace.smartFilter.minimumRating = rating
+            } label: {
+              Label(
+                rating == 0 ? "Any rating" : "At least \(rating) stars",
+                systemImage: workspace.smartFilter.minimumRating == rating
+                  ? "checkmark" : "star"
+              )
+            }
+          }
+        }
+
+        Section("Colour label") {
+          ForEach(ColorLabel.allCases, id: \.rawValue) { label in
+            Button {
+              toggle(label)
+            } label: {
+              Label(
+                label.title,
+                systemImage: workspace.smartFilter.colorLabels.contains(label)
+                  ? "checkmark.circle.fill" : "circle"
+              )
+            }
+          }
+        }
+
+        Divider()
+        Toggle("Missing sources only", isOn: $workspace.smartFilter.showMissingOnly)
+        Button("Clear Filters") { workspace.smartFilter = LibrarySmartFilter() }
+          .disabled(!workspace.smartFilter.isActive)
+      } label: {
+        Label(
+          "Smart Filters",
+          systemImage: workspace.smartFilter.isActive
+            ? "line.3.horizontal.decrease.circle.fill"
+            : "line.3.horizontal.decrease.circle"
+        )
+      }
+      .labelStyle(.iconOnly)
+      .help("Filter by rating, colour label, or missing source")
+      .accessibilityIdentifier(ModernUIAccessibility.librarySmartFilter)
+      .modifier(GlassButtonWhenAvailable(prominent: workspace.smartFilter.isActive))
+    }
+  }
+
+  private func toggle(_ label: ColorLabel) {
+    if workspace.smartFilter.colorLabels.contains(label) {
+      workspace.smartFilter.colorLabels.remove(label)
+    } else {
+      workspace.smartFilter.colorLabels.insert(label)
+    }
+  }
+}
+
+extension ColorLabel {
+  var title: String {
+    switch self {
+    case .red: "Red"
+    case .yellow: "Yellow"
+    case .green: "Green"
+    case .blue: "Blue"
+    case .purple: "Purple"
+    case .unknown(let value): value
     }
   }
 }

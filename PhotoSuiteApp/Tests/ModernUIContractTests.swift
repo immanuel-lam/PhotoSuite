@@ -37,6 +37,10 @@ struct ModernUIContractTests {
     #expect(ModernUIAccessibility.develop == "workspace-develop")
     #expect(ModernUIAccessibility.deliver == "workspace-deliver")
     #expect(ModernUIAccessibility.librarySearchField == "library-search-field")
+    #expect(ModernUIAccessibility.librarySmartFilter == "library-smart-filter")
+    #expect(ModernUIAccessibility.libraryMetadataControls == "library-metadata-controls")
+    #expect(ModernUIAccessibility.newCollectionButton == "new-collection-button")
+    #expect(ModernUIAccessibility.newStackButton == "new-stack-button")
     #expect(ModernUIAccessibility.importButton == "import-button")
     #expect(ModernUIAccessibility.proofModeToggle == "proof-mode-toggle")
     #expect(ModernUIAccessibility.developCanvas == "develop-canvas")
@@ -45,5 +49,10 @@ struct ModernUIContractTests {
     #expect(ModernUIAccessibility.adjustmentExposure == "adjustment-exposure")
     #expect(ModernUIAccessibility.exportJPEGButton == "export-jpeg-button")
     #expect(ModernUIAccessibility.precisionControlsSurface == "precision-controls-surface")
+    #expect(ModernUIAccessibility.deliverResizeToggle == "deliver-resize-toggle")
+    #expect(ModernUIAccessibility.deliverMetadataPicker == "deliver-metadata-picker")
+    #expect(ModernUIAccessibility.deliverWatermarkToggle == "deliver-watermark-toggle")
+    #expect(ModernUIAccessibility.deliverSharpeningPicker == "deliver-sharpening-picker")
+    #expect(ModernUIAccessibility.deliverUnsupportedOptions == "deliver-unsupported-options")
   }
 }

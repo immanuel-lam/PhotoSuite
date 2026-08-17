@@ -11,6 +11,10 @@ enum ModernUIAccessibility {
   static let develop = "workspace-develop"
   static let deliver = "workspace-deliver"
   static let librarySearchField = "library-search-field"
+  static let librarySmartFilter = "library-smart-filter"
+  static let libraryMetadataControls = "library-metadata-controls"
+  static let newCollectionButton = "new-collection-button"
+  static let newStackButton = "new-stack-button"
   static let importButton = "import-button"
   static let proofModeToggle = "proof-mode-toggle"
   static let developCanvas = "develop-canvas"
@@ -19,6 +23,11 @@ enum ModernUIAccessibility {
   static let adjustmentExposure = "adjustment-exposure"
   static let exportJPEGButton = "export-jpeg-button"
   static let precisionControlsSurface = "precision-controls-surface"
+  static let deliverResizeToggle = "deliver-resize-toggle"
+  static let deliverMetadataPicker = "deliver-metadata-picker"
+  static let deliverWatermarkToggle = "deliver-watermark-toggle"
+  static let deliverSharpeningPicker = "deliver-sharpening-picker"
+  static let deliverUnsupportedOptions = "deliver-unsupported-options"
 }
 
 struct NavigationGlassSurface: ViewModifier {

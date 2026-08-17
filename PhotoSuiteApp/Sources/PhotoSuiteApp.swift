@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import Observation
+import PhotoDomain
 import PhotoWorkflow
 import SwiftUI
 
@@ -92,6 +93,68 @@ private struct PhotoSuiteCommands: Commands {
       Button("Export JPEG…") { workspace?.isChoosingExportDestination = true }
         .keyboardShortcut("e")
         .disabled(workspace?.selectedAsset == nil)
+    }
+
+    CommandMenu("Library") {
+      Button("Unrated") { Task { await workspace?.setRating(0) } }
+        .keyboardShortcut("0", modifiers: [])
+        .disabled(workspace?.selectedAsset == nil)
+      Button("1 Star") { Task { await workspace?.setRating(1) } }
+        .keyboardShortcut("1", modifiers: [])
+        .disabled(workspace?.selectedAsset == nil)
+      Button("2 Stars") { Task { await workspace?.setRating(2) } }
+        .keyboardShortcut("2", modifiers: [])
+        .disabled(workspace?.selectedAsset == nil)
+      Button("3 Stars") { Task { await workspace?.setRating(3) } }
+        .keyboardShortcut("3", modifiers: [])
+        .disabled(workspace?.selectedAsset == nil)
+      Button("4 Stars") { Task { await workspace?.setRating(4) } }
+        .keyboardShortcut("4", modifiers: [])
+        .disabled(workspace?.selectedAsset == nil)
+      Button("5 Stars") { Task { await workspace?.setRating(5) } }
+        .keyboardShortcut("5", modifiers: [])
+        .disabled(workspace?.selectedAsset == nil)
+
+      Divider()
+      Button("Red Colour Label") { Task { await workspace?.setColorLabel(.red) } }
+        .keyboardShortcut("6", modifiers: [])
+        .disabled(workspace?.selectedAsset == nil)
+      Button("Yellow Colour Label") { Task { await workspace?.setColorLabel(.yellow) } }
+        .keyboardShortcut("7", modifiers: [])
+        .disabled(workspace?.selectedAsset == nil)
+      Button("Green Colour Label") { Task { await workspace?.setColorLabel(.green) } }
+        .keyboardShortcut("8", modifiers: [])
+        .disabled(workspace?.selectedAsset == nil)
+      Button("Blue Colour Label") { Task { await workspace?.setColorLabel(.blue) } }
+        .keyboardShortcut("9", modifiers: [])
+        .disabled(workspace?.selectedAsset == nil)
+      Button("Purple Colour Label") { Task { await workspace?.setColorLabel(.purple) } }
+        .disabled(workspace?.selectedAsset == nil)
+      Button("Clear Colour Label") { Task { await workspace?.setColorLabel(nil) } }
+        .disabled(workspace?.selectedAsset == nil)
+
+      Divider()
+      Button("New Collection with Selected") {
+        guard let workspace else { return }
+        let collection = workspace.createCollection(
+          named: "Collection \(workspace.collections.count + 1)"
+        )
+        if let assetID = workspace.selectedAssetID {
+          workspace.addAsset(assetID, toCollection: collection.id)
+        }
+      }
+      .keyboardShortcut("n", modifiers: [.command, .option])
+      .disabled(workspace?.selectedAsset == nil)
+
+      Button("Stack Visible Photographs") {
+        guard let workspace else { return }
+        _ = workspace.createStack(
+          named: "Stack \(workspace.stacks.count + 1)",
+          assetIDs: workspace.filteredAssets.map(\.id)
+        )
+      }
+      .keyboardShortcut("g")
+      .disabled((workspace?.filteredAssets.count ?? 0) < 2)
     }
   }
 }

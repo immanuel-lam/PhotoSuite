@@ -101,14 +101,129 @@ public struct WorkspaceItemError: Identifiable, Hashable, Sendable {
   }
 }
 
+public struct LibrarySmartFilter: Codable, Hashable, Sendable {
+  public var minimumRating: Int
+  public var colorLabels: Set<ColorLabel>
+  public var showMissingOnly: Bool
+
+  public init(
+    minimumRating: Int = 0,
+    colorLabels: Set<ColorLabel> = [],
+    showMissingOnly: Bool = false
+  ) {
+    self.minimumRating = min(max(minimumRating, 0), 5)
+    self.colorLabels = colorLabels
+    self.showMissingOnly = showMissingOnly
+  }
+
+  public var isActive: Bool {
+    minimumRating > 0 || !colorLabels.isEmpty || showMissingOnly
+  }
+
+  public func matches(_ asset: PhotoAsset) -> Bool {
+    guard asset.rating >= minimumRating else { return false }
+    if !colorLabels.isEmpty {
+      guard let label = asset.colorLabel, colorLabels.contains(label) else { return false }
+    }
+    if showMissingOnly, !asset.isMissing { return false }
+    return true
+  }
+}
+
+public struct LibraryCollection: Codable, Hashable, Sendable, Identifiable {
+  public let id: UUID
+  public var name: String
+  public var assetIDs: [UUID]
+
+  public init(id: UUID = UUID(), name: String, assetIDs: [UUID] = []) {
+    self.id = id
+    self.name = name
+    self.assetIDs = assetIDs
+  }
+}
+
+public struct LibraryStack: Codable, Hashable, Sendable, Identifiable {
+  public let id: UUID
+  public var name: String
+  public var assetIDs: [UUID]
+  public var isExpanded: Bool
+
+  public init(
+    id: UUID = UUID(),
+    name: String,
+    assetIDs: [UUID],
+    isExpanded: Bool = true
+  ) {
+    self.id = id
+    self.name = name
+    self.assetIDs = assetIDs
+    self.isExpanded = isExpanded
+  }
+}
+
+public enum DeliverResize: Codable, Hashable, Sendable {
+  case original
+  case longEdge(Int)
+  case dimensions(width: Int, height: Int)
+}
+
+public enum DeliverMetadata: String, Codable, CaseIterable, Hashable, Sendable {
+  case basic
+  case copyrightOnly
+  case all
+  case none
+}
+
+public enum DeliverWatermark: Codable, Hashable, Sendable {
+  case none
+  case text(String)
+}
+
+public enum DeliverOutputSharpening: String, Codable, CaseIterable, Hashable, Sendable {
+  case none
+  case screenStandard
+  case screenHigh
+  case printStandard
+}
+
+public struct DeliverOptions: Codable, Hashable, Sendable {
+  public var resize: DeliverResize
+  public var metadata: DeliverMetadata
+  public var watermark: DeliverWatermark
+  public var outputSharpening: DeliverOutputSharpening
+
+  public init(
+    resize: DeliverResize = .original,
+    metadata: DeliverMetadata = .basic,
+    watermark: DeliverWatermark = .none,
+    outputSharpening: DeliverOutputSharpening = .none
+  ) {
+    self.resize = resize
+    self.metadata = metadata
+    self.watermark = watermark
+    self.outputSharpening = outputSharpening
+  }
+
+  public var unsupportedFeatures: [String] {
+    var features: [String] = []
+    if resize != .original { features.append("Resize") }
+    if metadata != .basic { features.append("Metadata") }
+    if watermark != .none { features.append("Watermark") }
+    if outputSharpening != .none { features.append("Output sharpening") }
+    return features
+  }
+}
+
 public enum PhotoWorkspaceError: Error, Equatable, LocalizedError, Sendable {
   case invalidAsset(URL)
   case recipeMissing(UUID)
   case sourceMissing(URL)
   case invalidSelection(UUID)
   case invalidAdjustment(String)
+  case invalidRating(Int)
   case noSelection(operation: String)
   case unknownOperationsBlockEditing
+  case unsupportedDeliverOptions([String])
   case operationFailed(operation: String, message: String)
 
   public var errorDescription: String? {
@@ -118,9 +233,12 @@ public enum PhotoWorkspaceError: Error, Equatable, LocalizedError, Sendable {
     case .sourceMissing(let url): "The source file is missing: \(url.lastPathComponent)."
     case .invalidSelection: "The selected photograph is not in the catalog."
     case .invalidAdjustment(let name): "The \(name) adjustment value is invalid."
+    case .invalidRating(let rating): "Rating \(rating) is outside the range 0 through 5."
     case .noSelection(let operation): "Select a photograph before you use \(operation)."
     case .unknownOperationsBlockEditing:
       "This recipe contains edits from a newer version. PhotoSuite did not change it."
+    case .unsupportedDeliverOptions(let features):
+      "The current JPEG engine does not support: \(features.joined(separator: ", "))."
     case .operationFailed(let operation, let message): "\(operation): \(message)"
     }
   }

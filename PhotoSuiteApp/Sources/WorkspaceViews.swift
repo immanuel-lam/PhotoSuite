@@ -63,14 +63,111 @@ struct WorkspaceSidebar: View {
           .foregroundStyle(.tertiary)
           .tracking(0.7)
 
-        HStack {
-          Label("All Photographs", systemImage: "photo.on.rectangle.angled")
-          Spacer()
-          Text(workspace.assets.count, format: .number)
-            .foregroundStyle(.secondary)
-            .monospacedDigit()
+        Button {
+          workspace.activeCollectionID = nil
+        } label: {
+          HStack {
+            Label("All Photographs", systemImage: "photo.on.rectangle.angled")
+            Spacer()
+            Text(workspace.assets.count, format: .number)
+              .foregroundStyle(.secondary)
+              .monospacedDigit()
+          }
+          .contentShape(.rect)
         }
+        .buttonStyle(.plain)
         .font(.callout)
+
+        HStack {
+          Text("COLLECTIONS")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.tertiary)
+            .tracking(0.7)
+          Spacer()
+          Button {
+            let collection = workspace.createCollection(
+              named: "Collection \(workspace.collections.count + 1)"
+            )
+            if let assetID = workspace.selectedAssetID {
+              workspace.addAsset(assetID, toCollection: collection.id)
+            }
+            workspace.activeCollectionID = collection.id
+          } label: {
+            Image(systemName: "plus")
+          }
+          .buttonStyle(.plain)
+          .help("Create a session collection")
+          .accessibilityIdentifier(ModernUIAccessibility.newCollectionButton)
+        }
+
+        if workspace.collections.isEmpty {
+          Text("No session collections")
+            .font(.caption)
+            .foregroundStyle(.tertiary)
+        } else {
+          ForEach(workspace.collections) { collection in
+            Button {
+              workspace.activeCollectionID = collection.id
+            } label: {
+              HStack {
+                Label(collection.name, systemImage: "rectangle.stack")
+                  .lineLimit(1)
+                Spacer()
+                Text(collection.assetIDs.count, format: .number)
+                  .foregroundStyle(.secondary)
+              }
+              .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .font(.callout)
+          }
+        }
+
+        if workspace.filteredAssets.count >= 2 || !workspace.stacks.isEmpty {
+          HStack {
+            Text("STACKS")
+              .font(.caption2.weight(.semibold))
+              .foregroundStyle(.tertiary)
+              .tracking(0.7)
+            Spacer()
+            Button {
+              _ = workspace.createStack(
+                named: "Stack \(workspace.stacks.count + 1)",
+                assetIDs: workspace.filteredAssets.map(\.id)
+              )
+            } label: {
+              Image(systemName: "square.stack.3d.up")
+            }
+            .buttonStyle(.plain)
+            .disabled(workspace.filteredAssets.count < 2)
+            .help("Stack visible photographs for this session")
+            .accessibilityIdentifier(ModernUIAccessibility.newStackButton)
+          }
+
+          ForEach(workspace.stacks) { stack in
+            Button {
+              workspace.toggleStack(stack.id)
+            } label: {
+              HStack {
+                Label(
+                  stack.name,
+                  systemImage: stack.isExpanded ? "square.stack.3d.up.fill" : "square.stack.3d.up"
+                )
+                .lineLimit(1)
+                Spacer()
+                Text(stack.assetIDs.count, format: .number)
+                  .foregroundStyle(.secondary)
+              }
+              .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .font(.callout)
+          }
+        }
+
+        Text("Collections and stacks are session-only in this version.")
+          .font(.caption2)
+          .foregroundStyle(.tertiary)
       }
       .padding(18)
 
@@ -91,6 +188,7 @@ struct WorkspaceSidebar: View {
               .font(.caption)
               .foregroundStyle(.secondary)
           }
+          LibraryMetadataControls(workspace: workspace, asset: asset)
         }
         .padding(18)
       }
@@ -98,6 +196,65 @@ struct WorkspaceSidebar: View {
     .modifier(NavigationGlassSurface(cornerRadius: 22))
     .shadow(color: .black.opacity(0.16), radius: 24, y: 10)
     .accessibilityIdentifier(ModernUIAccessibility.workspaceNavigation)
+  }
+}
+
+@MainActor
+private struct LibraryMetadataControls: View {
+  @Bindable var workspace: PhotoWorkspace
+  let asset: PhotoAsset
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(spacing: 3) {
+        ForEach(1...5, id: \.self) { rating in
+          Button {
+            Task { await workspace.setRating(asset.rating == rating ? 0 : rating) }
+          } label: {
+            Image(systemName: asset.rating >= rating ? "star.fill" : "star")
+          }
+          .buttonStyle(.plain)
+          .foregroundStyle(asset.rating >= rating ? Color.yellow : Color.secondary)
+          .help("Set \(rating)-star rating")
+        }
+      }
+      .accessibilityElement(children: .contain)
+      .accessibilityLabel("Rating")
+
+      HStack(spacing: 7) {
+        ForEach(ColorLabel.allCases, id: \.rawValue) { label in
+          Button {
+            Task { await workspace.setColorLabel(asset.colorLabel == label ? nil : label) }
+          } label: {
+            Circle()
+              .fill(label.color)
+              .frame(width: 11, height: 11)
+              .overlay {
+                if asset.colorLabel == label {
+                  Circle().stroke(.primary, lineWidth: 1.5).padding(-3)
+                }
+              }
+          }
+          .buttonStyle(.plain)
+          .help("Set \(label.title.lowercased()) colour label")
+          .accessibilityLabel("\(label.title) colour label")
+        }
+      }
+    }
+    .accessibilityIdentifier(ModernUIAccessibility.libraryMetadataControls)
+  }
+}
+
+extension ColorLabel {
+  fileprivate var color: Color {
+    switch self {
+    case .red: .red
+    case .yellow: .yellow
+    case .green: .green
+    case .blue: .blue
+    case .purple: .purple
+    case .unknown: .secondary
+    }
   }
 }
 
@@ -163,6 +320,43 @@ struct LibraryView: View {
                   )
                 }
                 .buttonStyle(.plain)
+                .contextMenu {
+                  Menu("Rating") {
+                    ForEach(0...5, id: \.self) { rating in
+                      Button(rating == 0 ? "Unrated" : "\(rating) stars") {
+                        Task {
+                          await workspace.selectAsset(asset.id)
+                          await workspace.setRating(rating)
+                        }
+                      }
+                    }
+                  }
+                  Menu("Colour Label") {
+                    Button("None") {
+                      Task {
+                        await workspace.selectAsset(asset.id)
+                        await workspace.setColorLabel(nil)
+                      }
+                    }
+                    ForEach(ColorLabel.allCases, id: \.rawValue) { label in
+                      Button(label.title) {
+                        Task {
+                          await workspace.selectAsset(asset.id)
+                          await workspace.setColorLabel(label)
+                        }
+                      }
+                    }
+                  }
+                  if !workspace.collections.isEmpty {
+                    Menu("Add to Collection") {
+                      ForEach(workspace.collections) { collection in
+                        Button(collection.name) {
+                          workspace.addAsset(asset.id, toCollection: collection.id)
+                        }
+                      }
+                    }
+                  }
+                }
                 .draggable(asset.sourceURL)
                 .accessibilityIdentifier("asset-\(asset.id.uuidString)")
               }
@@ -436,7 +630,6 @@ private struct DeliverySettings: View {
 
         SettingsSection(title: "OUTPUT") {
           LabeledContent("Color space", value: "sRGB")
-          LabeledContent("Metadata", value: "Basic source metadata")
           VStack(alignment: .leading, spacing: 8) {
             HStack {
               Text("Quality")
@@ -446,6 +639,49 @@ private struct DeliverySettings: View {
             }
             Slider(value: $quality, in: 0.4...1, step: 0.01)
           }
+        }
+
+        SettingsSection(title: "PROCESSING") {
+          Toggle("Resize to long edge", isOn: resizeEnabled)
+            .accessibilityIdentifier(ModernUIAccessibility.deliverResizeToggle)
+          if case .longEdge = workspace.deliverOptions.resize {
+            Stepper(
+              "Long edge: \(longEdgePixels.wrappedValue) px",
+              value: longEdgePixels,
+              in: 320...16_384,
+              step: 160
+            )
+          }
+
+          Picker("Metadata", selection: $workspace.deliverOptions.metadata) {
+            ForEach(DeliverMetadata.allCases, id: \.self) { metadata in
+              Text(metadata.title).tag(metadata)
+            }
+          }
+          .accessibilityIdentifier(ModernUIAccessibility.deliverMetadataPicker)
+
+          Toggle("Text watermark", isOn: watermarkEnabled)
+            .accessibilityIdentifier(ModernUIAccessibility.deliverWatermarkToggle)
+          if case .text = workspace.deliverOptions.watermark {
+            TextField("Watermark text", text: watermarkText)
+          }
+
+          Picker("Output sharpening", selection: $workspace.deliverOptions.outputSharpening) {
+            ForEach(DeliverOutputSharpening.allCases, id: \.self) { sharpening in
+              Text(sharpening.title).tag(sharpening)
+            }
+          }
+          .accessibilityIdentifier(ModernUIAccessibility.deliverSharpeningPicker)
+        }
+
+        if !workspace.deliverOptions.unsupportedFeatures.isEmpty {
+          Label(
+            "Not available in the current JPEG engine: \(workspace.deliverOptions.unsupportedFeatures.joined(separator: ", ")).",
+            systemImage: "info.circle"
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .accessibilityIdentifier(ModernUIAccessibility.deliverUnsupportedOptions)
         }
 
         Button(action: chooseDestination) {
@@ -462,7 +698,7 @@ private struct DeliverySettings: View {
         }
         .buttonStyle(.borderedProminent)
         .controlSize(.large)
-        .disabled(workspace.isExporting)
+        .disabled(workspace.isExporting || !workspace.deliverOptions.unsupportedFeatures.isEmpty)
         .accessibilityIdentifier(ModernUIAccessibility.exportJPEGButton)
 
         if let export = workspace.lastExport {
@@ -481,6 +717,72 @@ private struct DeliverySettings: View {
       Rectangle()
         .fill(Color(nsColor: .separatorColor))
         .frame(width: 0.5)
+    }
+  }
+
+  private var resizeEnabled: Binding<Bool> {
+    Binding(
+      get: {
+        if case .original = workspace.deliverOptions.resize { return false }
+        return true
+      },
+      set: { enabled in
+        workspace.deliverOptions.resize = enabled ? .longEdge(2_560) : .original
+      }
+    )
+  }
+
+  private var longEdgePixels: Binding<Int> {
+    Binding(
+      get: {
+        if case .longEdge(let pixels) = workspace.deliverOptions.resize { return pixels }
+        return 2_560
+      },
+      set: { workspace.deliverOptions.resize = .longEdge($0) }
+    )
+  }
+
+  private var watermarkEnabled: Binding<Bool> {
+    Binding(
+      get: {
+        if case .none = workspace.deliverOptions.watermark { return false }
+        return true
+      },
+      set: { enabled in
+        workspace.deliverOptions.watermark = enabled ? .text("PhotoSuite") : .none
+      }
+    )
+  }
+
+  private var watermarkText: Binding<String> {
+    Binding(
+      get: {
+        if case .text(let text) = workspace.deliverOptions.watermark { return text }
+        return ""
+      },
+      set: { workspace.deliverOptions.watermark = .text($0) }
+    )
+  }
+}
+
+extension DeliverMetadata {
+  fileprivate var title: String {
+    switch self {
+    case .basic: "Basic source metadata"
+    case .copyrightOnly: "Copyright only"
+    case .all: "All metadata"
+    case .none: "No metadata"
+    }
+  }
+}
+
+extension DeliverOutputSharpening {
+  fileprivate var title: String {
+    switch self {
+    case .none: "None"
+    case .screenStandard: "Screen — standard"
+    case .screenHigh: "Screen — high"
+    case .printStandard: "Print — standard"
     }
   }
 }

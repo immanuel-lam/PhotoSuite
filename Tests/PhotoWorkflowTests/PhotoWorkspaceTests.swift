@@ -508,6 +508,75 @@ final class PhotoWorkspaceTests: XCTestCase {
     XCTAssertTrue(exportAccess)
     XCTAssertEqual(activeAccessCount, 0)
   }
+
+  func testRatingAndColourLabelPersistAndUpdateTheVisibleAsset() async throws {
+    let asset = makeAsset(name: "rated.jpg")
+    let recipe = makeRecipe(assetID: asset.id)
+    let catalog = CatalogSpy(assets: [asset], recipes: [asset.id: recipe])
+    let workspace = makeWorkspace(catalog: catalog)
+    await workspace.reopen()
+
+    await workspace.setRating(4)
+    await workspace.setColorLabel(.green)
+
+    XCTAssertEqual(workspace.selectedAsset?.rating, 4)
+    XCTAssertEqual(workspace.selectedAsset?.colorLabel, .green)
+    let storedAssets = await catalog.assetSnapshot()
+    let stored = try XCTUnwrap(storedAssets.first)
+    XCTAssertEqual(stored.rating, 4)
+    XCTAssertEqual(stored.colorLabel, .green)
+  }
+
+  func testCollectionsStacksAndSmartFiltersComposeWithoutChangingAssets() async throws {
+    let green = makeAsset(name: "green.jpg", rating: 4, colorLabel: .green)
+    let red = makeAsset(name: "red.jpg", rating: 2, colorLabel: .red)
+    let catalog = CatalogSpy(
+      assets: [green, red],
+      recipes: [
+        green.id: makeRecipe(assetID: green.id),
+        red.id: makeRecipe(assetID: red.id),
+      ]
+    )
+    let workspace = makeWorkspace(catalog: catalog)
+    await workspace.reopen()
+
+    let collection = workspace.createCollection(named: "Portfolio")
+    workspace.addAsset(green.id, toCollection: collection.id)
+    workspace.activeCollectionID = collection.id
+    workspace.smartFilter = LibrarySmartFilter(minimumRating: 3, colorLabels: [.green])
+    let stack = workspace.createStack(named: "Burst", assetIDs: [green.id, red.id])
+
+    XCTAssertEqual(workspace.filteredAssets.map(\.id), [green.id])
+    XCTAssertEqual(workspace.assets.count, 2)
+    XCTAssertEqual(workspace.stack(containing: green.id)?.id, stack.id)
+    workspace.toggleStack(stack.id)
+    XCTAssertEqual(workspace.stack(containing: green.id)?.isExpanded, false)
+  }
+
+  func testUnsupportedDeliverOptionsDoNotReachTheCurrentExporter() async throws {
+    let asset = makeAsset(name: "deliver.jpg")
+    let recipe = makeRecipe(assetID: asset.id)
+    let catalog = CatalogSpy(assets: [asset], recipes: [asset.id: recipe])
+    let exporter = ExporterSpy()
+    let workspace = makeWorkspace(catalog: catalog, exporter: exporter)
+    await workspace.reopen()
+    let options = DeliverOptions(
+      resize: .longEdge(2_048),
+      metadata: .basic,
+      watermark: .none,
+      outputSharpening: .none
+    )
+
+    await workspace.exportJPEG(
+      to: URL(fileURLWithPath: "/tmp/unsupported.jpg"),
+      quality: 0.9,
+      options: options
+    )
+
+    let request = await exporter.lastRequest()
+    XCTAssertNil(request)
+    XCTAssertEqual(workspace.lastError, .unsupportedDeliverOptions(["Resize"]))
+  }
 }
 
 extension PhotoWorkspaceTests {
@@ -549,7 +618,9 @@ extension PhotoWorkspaceTests {
   private func makeAsset(
     name: String,
     date: Date = Date(timeIntervalSince1970: 1),
-    isMissing: Bool = false
+    isMissing: Bool = false,
+    rating: Int = 0,
+    colorLabel: ColorLabel? = nil
   ) -> PhotoAsset {
     PhotoAsset(
       sourceURL: URL(fileURLWithPath: "/tmp/\(name)"),
@@ -563,6 +634,8 @@ extension PhotoWorkspaceTests {
       importDate: date,
       captureDate: nil,
       pixelDimensions: PixelDimensions(width: 20, height: 10),
+      rating: rating,
+      colorLabel: colorLabel,
       isMissing: isMissing
     )!
   }

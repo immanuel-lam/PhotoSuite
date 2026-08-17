@@ -30,6 +30,11 @@ public final class PhotoWorkspace {
   public var proofMode = false
   public var showsBefore = false
   public var lastExport: DurableDerivative?
+  public var collections: [LibraryCollection] = []
+  public var stacks: [LibraryStack] = []
+  public var smartFilter = LibrarySmartFilter()
+  public var activeCollectionID: UUID?
+  public var deliverOptions = DeliverOptions()
 
   public var selectedAsset: PhotoAsset? {
     guard let selectedAssetID else { return nil }
@@ -47,8 +52,18 @@ public final class PhotoWorkspace {
   }
 
   public var filteredAssets: [PhotoAsset] {
-    guard !searchText.isEmpty else { return assets }
-    return assets.filter { $0.filename.localizedCaseInsensitiveContains(searchText) }
+    let collectionAssetIDs = activeCollectionID.flatMap { collectionID in
+      collections.first { $0.id == collectionID }.map { Set($0.assetIDs) }
+    }
+    return assets.filter { asset in
+      if !searchText.isEmpty,
+        !asset.filename.localizedCaseInsensitiveContains(searchText)
+      {
+        return false
+      }
+      if let collectionAssetIDs, !collectionAssetIDs.contains(asset.id) { return false }
+      return smartFilter.matches(asset)
+    }
   }
 
   public var canUndo: Bool { !undoStack.isEmpty }
@@ -74,7 +89,9 @@ public final class PhotoWorkspace {
   @ObservationIgnored private var previewTask: Task<PreviewTaskOutput, any Error>?
   @ObservationIgnored private var scheduledPreviewTask: Task<Void, Never>?
   @ObservationIgnored private var editMutationTail: Task<Void, Never>?
+  @ObservationIgnored private var libraryMutationTail: Task<Void, Never>?
   private var editMutationGeneration: UInt64 = 0
+  private var libraryMutationGeneration: UInt64 = 0
 
   public init(
     catalog: any CatalogStore,
@@ -102,6 +119,7 @@ public final class PhotoWorkspace {
     previewTask?.cancel()
     scheduledPreviewTask?.cancel()
     editMutationTail?.cancel()
+    libraryMutationTail?.cancel()
   }
 
   public func reopen() async {
@@ -260,6 +278,63 @@ public final class PhotoWorkspace {
     } catch {
       record(error, operation: "select")
     }
+  }
+
+  public func setRating(_ rating: Int) async {
+    guard (0...5).contains(rating) else {
+      record(PhotoWorkspaceError.invalidRating(rating), operation: "rating")
+      return
+    }
+    await enqueueLibraryMutation { [weak self] in
+      await self?.updateSelectedAssetMetadata(rating: rating, colorLabel: nil)
+    }
+  }
+
+  public func setColorLabel(_ colorLabel: ColorLabel?) async {
+    await enqueueLibraryMutation { [weak self] in
+      await self?.updateSelectedAssetMetadata(rating: nil, colorLabel: .some(colorLabel))
+    }
+  }
+
+  @discardableResult
+  public func createCollection(named name: String) -> LibraryCollection {
+    let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    let collection = LibraryCollection(
+      name: trimmedName.isEmpty ? "Untitled Collection" : trimmedName
+    )
+    collections.append(collection)
+    return collection
+  }
+
+  public func addAsset(_ assetID: UUID, toCollection collectionID: UUID) {
+    guard assets.contains(where: { $0.id == assetID }),
+      let index = collections.firstIndex(where: { $0.id == collectionID }),
+      !collections[index].assetIDs.contains(assetID)
+    else { return }
+    collections[index].assetIDs.append(assetID)
+  }
+
+  @discardableResult
+  public func createStack(named name: String, assetIDs: [UUID]) -> LibraryStack {
+    let availableIDs = Set(assets.map(\.id))
+    var seen: Set<UUID> = []
+    let members = assetIDs.filter { availableIDs.contains($0) && seen.insert($0).inserted }
+    let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    let stack = LibraryStack(
+      name: trimmedName.isEmpty ? "Untitled Stack" : trimmedName,
+      assetIDs: members
+    )
+    stacks.append(stack)
+    return stack
+  }
+
+  public func toggleStack(_ stackID: UUID) {
+    guard let index = stacks.firstIndex(where: { $0.id == stackID }) else { return }
+    stacks[index].isExpanded.toggle()
+  }
+
+  public func stack(containing assetID: UUID) -> LibraryStack? {
+    stacks.first { $0.assetIDs.contains(assetID) }
   }
 
   public func adjustmentValue(_ kind: AdjustmentKind) -> Double {
@@ -526,8 +601,23 @@ public final class PhotoWorkspace {
   }
 
   public func exportJPEG(to destinationURL: URL, quality: Double) async {
+    await exportJPEG(to: destinationURL, quality: quality, options: deliverOptions)
+  }
+
+  public func exportJPEG(
+    to destinationURL: URL,
+    quality: Double,
+    options: DeliverOptions
+  ) async {
     lastExport = nil
     lastError = nil
+    guard options.unsupportedFeatures.isEmpty else {
+      record(
+        PhotoWorkspaceError.unsupportedDeliverOptions(options.unsupportedFeatures),
+        operation: "export"
+      )
+      return
+    }
     guard let asset = selectedAsset, let recipe = currentRecipe else {
       record(PhotoWorkspaceError.noSelection(operation: "export"), operation: "export")
       return
@@ -641,6 +731,65 @@ public final class PhotoWorkspace {
     editMutationTail = task
     await task.value
     if generation == editMutationGeneration { editMutationTail = nil }
+  }
+
+  private func enqueueLibraryMutation(
+    _ mutation: @escaping @MainActor @Sendable () async -> Void
+  ) async {
+    let previous = libraryMutationTail
+    libraryMutationGeneration &+= 1
+    let generation = libraryMutationGeneration
+    let task = Task { @MainActor in
+      await previous?.value
+      guard !Task.isCancelled else { return }
+      await mutation()
+    }
+    libraryMutationTail = task
+    await task.value
+    if generation == libraryMutationGeneration { libraryMutationTail = nil }
+  }
+
+  private func updateSelectedAssetMetadata(
+    rating: Int?,
+    colorLabel: ColorLabel??
+  ) async {
+    guard let asset = selectedAsset else {
+      record(
+        PhotoWorkspaceError.noSelection(operation: "library metadata"),
+        operation: "library.metadata"
+      )
+      return
+    }
+    guard
+      let updated = PhotoAsset(
+        id: asset.id,
+        sourceURL: asset.sourceURL,
+        filename: asset.filename,
+        typeIdentifier: asset.typeIdentifier,
+        fingerprint: asset.fingerprint,
+        importDate: asset.importDate,
+        captureDate: asset.captureDate,
+        pixelDimensions: asset.pixelDimensions,
+        rating: rating ?? asset.rating,
+        colorLabel: colorLabel ?? asset.colorLabel,
+        isMissing: asset.isMissing
+      )
+    else {
+      record(PhotoWorkspaceError.invalidRating(rating ?? asset.rating), operation: "rating")
+      return
+    }
+    guard updated != asset else { return }
+    do {
+      let persisted = try await catalog.upsertAsset(
+        CatalogAssetUpsertRequest(asset: updated)
+      ).asset
+      guard let index = assets.firstIndex(where: { $0.id == persisted.id }) else { return }
+      assets[index] = persisted
+      lastError = nil
+      errorMessage = nil
+    } catch {
+      record(error, operation: "library.metadata")
+    }
   }
 
   private func editableRecipe(operation: String) -> EditRecipe? {
