@@ -417,30 +417,87 @@ public final class PhotoWorkspace {
     }
   }
 
+  /// Imports files by reference for compatibility with existing callers. New import flows should
+  /// use the mode overload, which defaults to fingerprint duplicate skipping.
   public func importURLs(_ urls: [URL]) async {
+    await importURLs(urls, mode: .add, duplicatePolicy: .allow)
+  }
+
+  /// Imports files using explicit Add, Copy, or Move semantics. Transfer and checksum verification
+  /// happen before a catalog row is created, so a failed copy or move cannot leave a dangling
+  /// source record. Move removes the original only after the destination fingerprint matches.
+  public func importURLs(
+    _ urls: [URL],
+    mode: PhotoImportMode,
+    duplicatePolicy: PhotoImportDuplicatePolicy = .skip
+  ) async {
     isLoading = true
     errorMessage = nil
     lastError = nil
     itemErrors = []
-    var imported: [(PhotoAsset, EditRecipe)] = []
+    defer { isLoading = false }
 
-    for url in urls {
-      let started = await sourceAccess.start(url)
+    let existingAssets: [PhotoAsset]
+    do {
+      existingAssets = try await catalog.listAssets(
+        CatalogAssetListRequest(order: .importDateDescending)
+      ).assets
+    } catch {
+      existingAssets = assets
+      record(error, operation: "import.list")
+    }
+
+    let service = PhotoImportService(
+      sourceAccess: PhotoImportSourceAccess(workspaceAccess: sourceAccess),
+      fingerprint: fingerprint
+    )
+    let transferResult: PhotoImportResult
+    do {
+      transferResult = try await service.import(
+        PhotoImportRequest(
+          urls: urls,
+          mode: mode,
+          duplicatePolicy: duplicatePolicy,
+          existingAssets: existingAssets
+        )
+      )
+    } catch is CancellationError {
+      return
+    } catch {
+      record(error, operation: "import.transfer")
+      return
+    }
+
+    for duplicate in transferResult.duplicates {
+      let detail: String
+      if let existingSourceURL = duplicate.existingSourceURL {
+        detail = "Skipped duplicate of \(existingSourceURL.lastPathComponent)."
+      } else {
+        detail = "Skipped duplicate source content."
+      }
+      itemErrors.append(WorkspaceItemError(sourceURL: duplicate.sourceURL, message: detail))
+    }
+    for failure in transferResult.failures {
+      itemErrors.append(WorkspaceItemError(sourceURL: failure.sourceURL, message: failure.message))
+    }
+
+    var imported: [(PhotoAsset, EditRecipe)] = []
+    for item in transferResult.imported {
+      let started = await sourceAccess.start(item.catalogURL)
       do {
-        let sourceFingerprint = try await fingerprint(url)
-        let sourceProbe = try await probe(url)
+        let sourceProbe = try await probe(item.catalogURL)
         guard
           let asset = PhotoAsset(
-            sourceURL: url,
-            filename: url.lastPathComponent,
+            sourceURL: item.catalogURL,
+            filename: item.catalogURL.lastPathComponent,
             typeIdentifier: sourceProbe.typeIdentifier,
-            fingerprint: sourceFingerprint,
+            fingerprint: item.fingerprint,
             importDate: now(),
             captureDate: nil,
             pixelDimensions: sourceProbe.dimensions
           )
         else {
-          throw PhotoWorkspaceError.invalidAsset(url)
+          throw PhotoWorkspaceError.invalidAsset(item.catalogURL)
         }
         _ = try await catalog.upsertAsset(CatalogAssetUpsertRequest(asset: asset))
         let recipe = EditRecipe(assetID: asset.id, date: now(), pins: sourceProbe.pins)
@@ -449,34 +506,39 @@ public final class PhotoWorkspace {
         } catch {
           let missingAsset = await markImportedAssetMissing(asset)
           imported.append((missingAsset, recipe))
-          recordItemError(url: url, error: error, operation: "import.recipe")
-          if started { await sourceAccess.stop(url) }
+          recordItemError(url: item.catalogURL, error: error, operation: "import.recipe")
+          if started { await sourceAccess.stop(item.catalogURL) }
           continue
         }
 
         var visibleAsset = asset
         do {
-          try await sourceAccess.persist(asset.id, url)
+          try await sourceAccess.persist(asset.id, item.catalogURL)
         } catch {
           visibleAsset = await markImportedAssetMissing(asset)
-          recordItemError(url: url, error: error, operation: "import.bookmark")
+          recordItemError(url: item.catalogURL, error: error, operation: "import.bookmark")
         }
         imported.append((visibleAsset, recipe))
 
         do {
-          let result = try await renderer.render(renderRequest(url: url, recipe: recipe))
+          let result = try await renderer.render(
+            renderRequest(url: item.catalogURL, recipe: recipe)
+          )
           previewCache[asset.id] = PreviewFrame(result)
         } catch is CancellationError {
           // Cancellation is a normal result for rebuildable previews.
         } catch {
           itemErrors.append(
-            WorkspaceItemError(sourceURL: url, message: "Preview: \(message(for: error))")
+            WorkspaceItemError(
+              sourceURL: item.catalogURL,
+              message: "Preview: \(message(for: error))"
+            )
           )
         }
       } catch {
-        recordItemError(url: url, error: error, operation: "import")
+        recordItemError(url: item.catalogURL, error: error, operation: "import")
       }
-      if started { await sourceAccess.stop(url) }
+      if started { await sourceAccess.stop(item.catalogURL) }
     }
 
     assets.append(contentsOf: imported.map(\.0))
@@ -488,7 +550,6 @@ public final class PhotoWorkspace {
       resetHistory()
       syncDraftValues()
     }
-    isLoading = false
   }
 
   /// Relinks one missing catalog asset to an unchanged local source file.
